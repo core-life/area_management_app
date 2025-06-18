@@ -18,10 +18,18 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_super_secret_key_f
 # RenderではDATABASE_URLという環境変数にPostgreSQLの接続情報が設定されます
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///area_management.db')
 
+# PostgreSQLのURLの場合、psycopg2ドライバを指定するために'postgresql'を'postgresql+psycopg2'に置換
+# アプリケーション初期化の早い段階でURIを修正
+if app.config['SQLALCHEMY_DATABASE_URI'].startswith("postgresql://"):
+    app.config['SQLALCHEMY_DATABASE_URI'] = app.config['SQLALCHEMY_DATABASE_URI'].replace("postgresql://", "postgresql+psycopg2://")
+    print(f"データベースURIをPostgreSQL用に設定しました: {app.config['SQLALCHEMY_DATABASE_URI']}")
+else:
+    print("DATABASE_URL環境変数が設定されていないため、SQLiteを使用します。")
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# --- データベースモデルの定義 ---
+# --- データベースモデルの定義 (変更なし) ---
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False) # ユーザー名はメールアドレスに固定
@@ -80,23 +88,9 @@ class AreaChangeLog(db.Model):
 # --- データベースの初期化とデータ投入関数 ---
 def init_db_and_data():
     with app.app_context():
-        # PostgreSQLの場合のURLを修正して、psycopg2-binaryが認識できるようにする
-        # 環境変数DATABASE_URLが設定されているか確認
-        if 'DATABASE_URL' in os.environ:
-            # PostgreSQLのURLの場合、psycopg2ドライバを指定するために'postgresql'を'postgresql+psycopg2'に置換
-            # RenderのDATABASE_URLは 'postgresql://' で始まるため、これを利用します
-            current_db_uri = app.config['SQLALCHEMY_DATABASE_URI']
-            if current_db_uri.startswith("postgresql://"):
-                app.config['SQLALCHEMY_DATABASE_URI'] = current_db_uri.replace("postgresql://", "postgresql+psycopg2://")
-                print(f"データベースURIをPostgreSQL用に設定しました: {app.config['SQLALCHEMY_DATABASE_URI']}")
-        else:
-            print("DATABASE_URL環境変数が設定されていないため、SQLiteを使用します。")
-
-        # データベースの再初期化（テーブルが存在する場合は削除して再作成）
-        # Renderでは永続化されないため、毎回テーブルを再作成するロジックは必要ないことが多いですが、
-        # 初期データの投入を確実にするため、もしテーブルが存在しなければ作成します。
-        # 本番環境では db.create_all() は初回のみ実行し、以降はマイグレーションツール(Alembicなど)を使用することを推奨
-        db.create_all() # 全てのテーブルを作成
+        # db.create_all() は、テーブルが存在しない場合にのみ作成します
+        # 既に存在するテーブルは再作成しません。
+        db.create_all() 
 
         # テスト管理者ユーザーの追加 (初回実行時のみ)
         admin_email = 'admin@clp-ytmm.com' # 管理者メールアドレスもドメイン制限に合わせる
@@ -126,11 +120,12 @@ def init_db_and_data():
         # 市区町村データの読み込みと投入 (初回実行時のみ)
         csv_file_path = 'municipalities.csv'
         
+        # Municipalityテーブルが空の場合、かつcsvファイルが存在する場合のみデータ投入
         if not Municipality.query.first() and os.path.exists(csv_file_path):
             print(f"{csv_file_path}から市区町村データを投入します...")
             df = None
             # local_gov_codeとpostal_codeを明示的に文字列として読み込む
-            read_csv_params = {'dtype': {'地方公共団体コード': str, '郵便番号': str}} # ★日本語列名に変更★
+            read_csv_params = {'dtype': {'地方公共団体コード': str, '郵便番号': str}} 
             try:
                 # まずはutf-8で試行
                 df = pd.read_csv(csv_file_path, encoding='utf-8', **read_csv_params)
@@ -139,151 +134,131 @@ def init_db_and_data():
                 try:
                     # utf-8で失敗した場合、cp932で試行
                     df = pd.read_csv(csv_file_path, encoding='cp932', **read_csv_params)
-                except Exception as e: # より広範なエラーをキャッチ
+                except Exception as e: 
                     print(f"CSVファイルの読み込みエラー: cp932 (Shift-JIS) でも読み込みに失敗しました。")
                     print(f"ファイルが壊れているか、別のエンコーディングの可能性があります。エラー: {e}")
-                    return # 処理を中断
-            except Exception as e: # その他のファイル読み込みエラー
+                    return 
+            except Exception as e: 
                 print(f"CSVファイルの読み込み中に予期せぬエラーが発生しました: {e}")
                 return
 
-            if df is not None: # dfが正常に読み込まれた場合のみ処理を続行
-                # DataFrameの列が期待通りか確認 (念のため)
-                expected_columns = ['郵便番号', '地方公共団体コード', '都道府県', '市区町村'] # ★日本語列名に変更★
+            if df is not None: 
+                expected_columns = ['郵便番号', '地方公共団体コード', '都道府県', '市区町村'] 
                 if not all(col in df.columns for col in expected_columns):
                     print(f"CSVファイルの列が期待と異なります。期待される列: {expected_columns}, 実際の列: {df.columns.tolist()}")
-                    return # 処理を中断
+                    return 
 
                 for index, row in df.iterrows():
                     municipality = Municipality(
-                        postal_code=row['郵便番号'], # ★日本語列名から取得★
-                        local_gov_code=row['地方公共団体コード'], # ★日本語列名から取得★
-                        prefecture=row['都道府県'], # ★日本語列名から取得★
-                        city_town_village=row['市区町村'] # ★日本語列名から取得★
+                        postal_code=row['郵便番号'], 
+                        local_gov_code=row['地方公共団体コード'], 
+                        prefecture=row['都道府県'], 
+                        city_town_village=row['市区町村'] 
                     )
                     db.session.add(municipality)
                 db.session.commit()
                 print("市区町村データの投入が完了しました。")
-            else: # dfがNoneの場合 (読み込みエラーでreturnしなかったがdfがNoneの場合)
+            else: 
                 print("市区町村データの読み込みに失敗したため、データベースへの投入をスキップします。")
         elif not os.path.exists(csv_file_path):
             print(f"WARNING: {csv_file_path}が見つかりません。市区町村データが投入されません。")
         else:
             print("市区町村データは既に投入されています。")
 
-# --- ルート（URLと関数のマッピング）の定義 ---
+# --- Flaskアプリケーションのコンテキストが準備できた後にデータベースを初期化 ---
+# これにより、Gunicornによって起動された場合でもdb.create_all()が確実に実行されます。
+with app.app_context():
+    init_db_and_data()
+
+# --- ルート（URLと関数のマッピング）の定義 (変更なし) ---
 
 # ログインページを表示
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    # 既にログイン済みの場合は、初回ログイン状態や管理者権限に応じて適切なダッシュボードへリダイレクト
     if 'user_id' in session:
         user = User.query.get(session['user_id'])
         if user:
-            if user.is_first_login: # 初回ログインの場合はパスワードリセット画面へ
+            if user.is_first_login: 
                 return redirect(url_for('reset_password'))
-            elif user.is_admin: # 管理者の場合は管理者ダッシュボードへ
+            elif user.is_admin: 
                 return redirect(url_for('admin_dashboard'))
-            else: # 営業職員の場合は営業職員ダッシュボードへ
+            else: 
                 return redirect(url_for('sales_dashboard'))
 
-    # POSTリクエスト（ログインフォーム送信）の場合の処理
     if request.method == 'POST':
-        email = request.form['email'].strip() # 入力されたメールアドレス
-        password = request.form['password'] # 入力されたパスワード
-        user = User.query.filter_by(email=email).first() # メールアドレスでユーザーを検索
+        email = request.form['email'].strip() 
+        password = request.form['password'] 
+        user = User.query.filter_by(email=email).first() 
 
-        # ユーザーが存在し、パスワードが正しい場合
         if user and user.check_password(password):
-            # セッションにユーザー情報を保存
             session['user_id'] = user.id
             session['user_email'] = user.email
             session['user_name'] = user.name
             session['is_admin'] = user.is_admin
-            flash('ログインしました！', 'success') # 成功メッセージ
+            flash('ログインしました！', 'success') 
             
-            # 初回ログインの場合はパスワードリセット画面へリダイレクト
             if user.is_first_login:
                 return redirect(url_for('reset_password'))
-            # 管理者の場合は管理者ダッシュボードへリダイレクト
             elif user.is_admin:
                 return redirect(url_for('admin_dashboard'))
-            # それ以外（営業職員）は営業職員ダッシュボードへリダイレクト
             else:
                 return redirect(url_for('sales_dashboard'))
         else:
-            # ログイン失敗メッセージ
             flash('メールアドレスまたはパスワードが間違っています。', 'danger')
-    # GETリクエスト（ログイン画面表示）の場合の処理
     return render_template('login.html')
 
 # 新規登録ページを表示・処理
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
-        email = request.form['email'].strip() # メールアドレス (前後の空白除去)
-        affiliation = request.form['affiliation'].strip() # 所属 (前後の空白除去)
-        # 名前の全角・半角スペースを除去し、前後の空白も除去
+        email = request.form['email'].strip() 
+        affiliation = request.form['affiliation'].strip() 
         name = request.form['name'].replace(' ', '').replace('　', '').strip() 
 
-        # メールアドレスのドメイン検証
         if not email.endswith('@clp-ytmm.com'):
             flash('メールアドレスは "@clp-ytmm.com" ドメインである必要があります。', 'danger')
-            # 入力値を保持してテンプレートを再表示
             return render_template('register.html', email=email, affiliation=affiliation, name=name)
 
-        # メールアドレスの重複チェック
         if User.query.filter_by(email=email).first():
             flash('このメールアドレスは既に登録されています。', 'danger')
-            # 入力値を保持してテンプレートを再表示
             return render_template('register.html', email=email, affiliation=affiliation, name=name)
 
-        # 仮パスワード生成 (8桁の英数字)
         temporary_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for i in range(8))
 
-        # 新しいユーザーオブジェクトを作成
         new_user = User(
             email=email,
             name=name,
             affiliation=affiliation,
-            is_admin=False, # 新規登録されるのは営業職員とする
-            is_first_login=True # 初回ログインフラグを立てる
+            is_admin=False, 
+            is_first_login=True 
         )
-        # 仮パスワードをハッシュ化して設定
         new_user.set_password(temporary_password) 
 
         try:
-            # データベースに追加・コミット
             db.session.add(new_user)
             db.session.commit()
 
             flash(f'ユーザー登録が完了しました。初回ログイン時にパスワードを変更してください。', 'success')
-            # 仮パスワードを登録成功画面に表示 (実際はメールで送信するが今回は画面表示で代替)
             return render_template('registration_success.html', email=email, temporary_password=temporary_password)
         except Exception as e:
-            db.session.rollback() # エラー時はロールバック
+            db.session.rollback() 
             flash(f'ユーザー登録中にエラーが発生しました。もう一度お試しください。 ({e})', 'danger')
-            # エラー時も入力値を保持してテンプレートを再表示
             return render_template('register.html', email=email, affiliation=affiliation, name=name)
 
-    # GETリクエスト（新規登録フォーム表示）の場合の処理
     return render_template('register.html')
 
 # 初回パスワード再設定ページを表示・処理
 @app.route('/reset_password', methods=['GET', 'POST'])
 def reset_password():
-    # ログインしていない場合はログイン画面へリダイレクト
     if 'user_id' not in session:
         flash('ログインしてください。', 'warning')
         return redirect(url_for('login'))
 
     user = User.query.get(session['user_id'])
-    # ユーザーが見つからない場合
     if not user:
         flash('ユーザーが見つかりません。', 'danger')
         return redirect(url_for('login'))
 
-    # 初回ログインではない場合、パスワード再設定は不要なのでダッシュボードへリダイレクト
     if not user.is_first_login:
         flash('パスワードは既に設定済みです。', 'info')
         if user.is_admin:
@@ -291,29 +266,24 @@ def reset_password():
         else:
             return redirect(url_for('sales_dashboard'))
 
-    # POSTリクエスト（パスワード再設定フォーム送信）の場合の処理
     if request.method == 'POST':
-        new_password = request.form['new_password'] # 新しいパスワード
-        confirm_password = request.form['confirm_password'] # 確認用パスワード
+        new_password = request.form['new_password'] 
+        confirm_password = request.form['confirm_password'] 
 
-        # パスワードの一致チェック
         if new_password != confirm_password:
             flash('新しいパスワードと確認用パスワードが一致しません。', 'danger')
-            return render_template('reset_password.html') # フォームを再表示
+            return render_template('reset_password.html') 
 
-        # 新しいパスワードをハッシュ化して設定
         user.set_password(new_password)
-        user.is_first_login = False # 初回ログインフラグを解除
-        db.session.commit() # データベースにコミット
+        user.is_first_login = False 
+        db.session.commit() 
 
-        flash('パスワードが正常に更新されました！', 'success') # 成功メッセージ
-        # 更新後、管理者または営業職員ダッシュボードへリダイレクト
+        flash('パスワードが正常に更新されました！', 'success') 
         if user.is_admin:
             return redirect(url_for('admin_dashboard'))
         else:
             return redirect(url_for('sales_dashboard'))
 
-    # GETリクエスト（パスワード再設定フォーム表示）の場合の処理
     return render_template('reset_password.html')
 
 # パスワードを忘れた場合の処理
@@ -322,22 +292,18 @@ def forgot_password():
     if request.method == 'POST':
         email = request.form['email'].strip()
 
-        # メールアドレスのドメイン検証
         if not email.endswith('@clp-ytmm.com'):
             flash('メールアドレスは "@clp-ytmm.com" ドメインである必要があります。', 'danger')
             return render_template('forgot_password.html', email=email)
 
         user = User.query.filter_by(email=email).first()
         if user:
-            # 仮パスワードを生成し、ユーザーのパスワードをリセット
             temporary_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for i in range(8))
             user.set_password(temporary_password)
-            user.is_first_login = True # 初回ログイン状態に戻すことで、パスワード再設定を強制
+            user.is_first_login = True 
             db.session.commit()
             
             flash('パスワードリセットリクエストを受け付けました。', 'success')
-            # 実際にはここにメール送信ロジックが入る
-            # 今回はデモのため、仮パスワードを画面に表示
             return render_template('forgot_password_success.html', email=email, temporary_password=temporary_password)
         else:
             flash('指定されたメールアドレスのユーザーは見つかりませんでした。', 'danger')
@@ -347,31 +313,26 @@ def forgot_password():
 # ログアウト機能
 @app.route('/logout')
 def logout():
-    # セッションからユーザー情報を削除
     session.pop('user_id', None)
     session.pop('user_email', None)
     session.pop('user_name', None)
     session.pop('is_admin', None)
-    flash('ログアウトしました。', 'info') # ログアウトメッセージ
-    return redirect(url_for('login')) # ログイン画面へリダイレクト
+    flash('ログアウトしました。', 'info') 
+    return redirect(url_for('login')) 
 
 # 営業職員ダッシュボード
 @app.route('/sales_dashboard', methods=['GET'])
 def sales_dashboard():
-    # ログインしていない、または管理者権限の場合はアクセス拒否
     if 'user_id' not in session or session.get('is_admin'):
         flash('権限がありません。', 'danger')
         return redirect(url_for('login'))
     
     current_user_id = session['user_id']
     
-    # 全ての市区町村データを取得 (地方公共団体コード順)
     municipalities = Municipality.query.order_by(Municipality.local_gov_code).all()
-    # ユーザーが現在選択している市区町村のIDを取得
     user_areas = UserArea.query.filter_by(user_id=current_user_id).all()
     user_selected_municipality_ids = {ua.municipality_id for ua in user_areas}
 
-    # 重複しない都道府県リストを作成 (ソート済み)
     prefectures = sorted(list(set(m.prefecture for m in municipalities)))
 
     return render_template(
@@ -384,63 +345,53 @@ def sales_dashboard():
 # 営業職員の対応エリア保存機能
 @app.route('/save_sales_area', methods=['POST'])
 def save_sales_area():
-    # ログインしていない、または管理者権限の場合はアクセス拒否
     if 'user_id' not in session or session.get('is_admin'):
         flash('権限がありません。', 'danger')
         return redirect(url_for('login'))
 
     current_user_id = session['user_id']
-    selected_municipality_ids_str = request.form.getlist('selected_areas') # 選択されたエリアIDのリスト
-    selected_municipality_ids = {int(mid) for mid in selected_municipality_ids_str} # セットに変換
+    selected_municipality_ids_str = request.form.getlist('selected_areas') 
+    selected_municipality_ids = {int(mid) for mid in selected_municipality_ids_str} 
 
-    # 現在ユーザーが担当しているエリアを取得
     current_user_areas = UserArea.query.filter_by(user_id=current_user_id).all()
     current_user_area_ids = {ua.municipality_id for ua in current_user_areas}
 
-    # 削除するエリアを特定し、ログに記録
     areas_to_delete = current_user_area_ids - selected_municipality_ids
     for muni_id in areas_to_delete:
         area_to_delete = UserArea.query.filter_by(user_id=current_user_id, municipality_id=muni_id).first()
         if area_to_delete:
             db.session.delete(area_to_delete)
-            # 変更履歴を記録
             log_entry = AreaChangeLog(user_id=current_user_id, municipality_id=muni_id, change_type='unassigned')
             db.session.add(log_entry)
 
-    # 追加するエリアを特定し、ログに記録
     areas_to_add = selected_municipality_ids - current_user_area_ids
     for muni_id in areas_to_add:
         new_user_area = UserArea(user_id=current_user_id, municipality_id=muni_id)
         db.session.add(new_user_area)
-        # 変更履歴を記録
         log_entry = AreaChangeLog(user_id=current_user_id, municipality_id=muni_id, change_type='assigned')
         db.session.add(log_entry)
 
-    db.session.commit() # データベースに変更をコミット
-    flash('対応エリアが更新されました！', 'success') # 成功メッセージ
-    return redirect(url_for('sales_dashboard')) # ダッシュボードへリダイレクト
+    db.session.commit() 
+    flash('対応エリアが更新されました！', 'success') 
+    return redirect(url_for('sales_dashboard')) 
 
 # 営業職員の変更履歴表示
 @app.route('/sales_history')
 def sales_history():
-    # ログインしていない、または管理者権限の場合はアクセス拒否
     if 'user_id' not in session or session.get('is_admin'):
         flash('権限がありません。', 'danger')
         return redirect(url_for('login'))
 
     current_user_id = session['user_id']
-    # 過去1年間の変更履歴を取得（UTCタイムゾーンで計算）
     one_year_ago = datetime.utcnow() - timedelta(days=365)
 
-    # AreaChangeLog, Municipality, User をJOINしてデータを取得
     history_logs = db.session.query(AreaChangeLog, Municipality, User).\
         join(Municipality, AreaChangeLog.municipality_id == Municipality.id).\
         join(User, AreaChangeLog.user_id == User.id).\
         filter(AreaChangeLog.user_id == current_user_id).\
         filter(AreaChangeLog.change_date >= one_year_ago).\
-        order_by(AreaChangeLog.change_date.desc()).all() # 新しい順にソート
+        order_by(AreaChangeLog.change_date.desc()).all() 
 
-    # 表示用に整形
     formatted_logs = []
     for log, muni, user in history_logs:
         formatted_logs.append({
@@ -455,28 +406,22 @@ def sales_history():
 # 事務職員ダッシュボード
 @app.route('/admin_dashboard')
 def admin_dashboard():
-    # ログインしていない、または管理者権限がない場合はアクセス拒否
     if 'user_id' not in session or not session.get('is_admin'):
         flash('管理者権限が必要です。', 'danger')
         return redirect(url_for('login'))
     
-    # 全ての市区町村データを取得 (地方公共団体コード順)
     all_municipalities = Municipality.query.order_by(
         Municipality.local_gov_code
     ).all()
 
-    # 営業職員のみを取得 (名前順)
     all_users = User.query.filter_by(is_admin=False).order_by(User.name).all()
 
-    # 各市区町村に対応するユーザーのIDをマッピングするための辞書
     municipality_user_map = {}
     for muni in all_municipalities:
         municipality_user_map[muni.id] = set() 
 
-    # 全てのUserAreaを取得し、マッピング辞書を構築
     all_user_areas = UserArea.query.all()
     for user_area in all_user_areas:
-        # 営業職員にのみ関連するエリアをマッピング
         if any(u.id == user_area.user_id for u in all_users):
             municipality_user_map[user_area.municipality_id].add(user_area.user_id)
 
@@ -490,57 +435,47 @@ def admin_dashboard():
 # 事務職員によるユーザー管理ページ（一覧表示）
 @app.route('/admin_users')
 def admin_users():
-    # ログインしていない、または管理者権限がない場合はアクセス拒否
     if 'user_id' not in session or not session.get('is_admin'):
         flash('管理者権限が必要です。', 'danger')
         return redirect(url_for('login'))
     
-    # 事務職員（管理者）以外のユーザーを取得 (メールアドレス順)
-    users = User.query.order_by(User.email).all() # 全てのユーザーを取得し、一覧で表示
+    users = User.query.order_by(User.email).all() 
     return render_template('admin_users.html', users=users)
 
 # 事務職員によるユーザー編集ページ
 @app.route('/edit_user/<int:user_id>', methods=['GET', 'POST'])
 def edit_user(user_id):
-    # ログインしていない、または管理者権限がない場合はアクセス拒否
     if 'user_id' not in session or not session.get('is_admin'):
         flash('管理者権限が必要です。', 'danger')
         return redirect(url_for('login'))
     
-    user = User.query.get_or_404(user_id) # ユーザーIDでユーザーを取得 (見つからない場合は404)
+    user = User.query.get_or_404(user_id) 
     
-    # ログイン中の事務職員が自分自身の管理者権限を変更できないようにする
     if user.id == session['user_id'] and user.is_admin:
         flash('ご自身の管理者権限は変更できません。', 'danger')
         return redirect(url_for('admin_users'))
 
-    # POSTリクエスト（ユーザー編集フォーム送信）の場合の処理
     if request.method == 'POST':
-        new_email = request.form['email'].strip() # 新しいメールアドレス
-        new_name = request.form['name'].replace(' ', '').replace('　', '').strip() # 新しい名前 (スペース除去)
-        new_affiliation = request.form['affiliation'].strip() # 新しい所属
-        reset_password_flag = 'reset_password' in request.form # パスワードリセットチェックボックスがチェックされたか
-        new_is_admin_status = 'is_admin' in request.form # 「このユーザーを事務職員にする」チェックボックスがチェックされたか
+        new_email = request.form['email'].strip() 
+        new_name = request.form['name'].replace(' ', '').replace('　', '').strip() 
+        new_affiliation = request.form['affiliation'].strip() 
+        reset_password_flag = 'reset_password' in request.form 
+        new_is_admin_status = 'is_admin' in request.form 
 
-        # メールアドレスのドメイン検証
         if not new_email.endswith('@clp-ytmm.com'):
             flash('メールアドレスは "@clp-ytmm.com" ドメインである必要があります。', 'danger')
-            return render_template('edit_user.html', user=user) # フォームを再表示
+            return render_template('edit_user.html', user=user) 
 
-        # メールアドレス変更の場合、重複チェック
         if new_email != user.email and User.query.filter_by(email=new_email).first():
             flash('このメールアドレスは既に他のユーザーに登録されています。', 'danger')
-            return render_template('edit_user.html', user=user) # フォームを再表示
+            return render_template('edit_user.html', user=user) 
 
-        # ユーザー情報を更新
         user.email = new_email
         user.name = new_name
         user.affiliation = new_affiliation
-        user.is_admin = new_is_admin_status # 管理者権限を更新
+        user.is_admin = new_is_admin_status 
         
-        # パスワードリセットが要求された場合
         if reset_password_flag:
-            # 仮パスワードを生成し、is_first_loginをTrueに設定
             temporary_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for i in range(8))
             user.set_password(temporary_password)
             user.is_first_login = True
@@ -548,39 +483,35 @@ def edit_user(user_id):
         else:
             flash('ユーザー情報が更新されました。', 'success')
         
-        db.session.commit() # データベースにコミット
-        return redirect(url_for('admin_users')) # ユーザー一覧ページへリダイレクト
+        db.session.commit() 
+        return redirect(url_for('admin_users')) 
     
-    # GETリクエスト（ユーザー編集フォーム表示）の場合の処理
     return render_template('edit_user.html', user=user)
 
 # 事務職員によるユーザー削除機能
 @app.route('/delete_user/<int:user_id>', methods=['POST'])
 def delete_user(user_id):
-    # ログインしていない、または管理者権限がない場合はアクセス拒否
     if 'user_id' not in session or not session.get('is_admin'):
         flash('管理者権限が必要です。', 'danger')
         return redirect(url_for('login'))
     
-    user = User.query.get_or_404(user_id) # ユーザーIDでユーザーを取得 (見つからない場合は404)
-    if user.is_admin: # 管理者ユーザーは削除させない
+    user = User.query.get_or_404(user_id) 
+    if user.is_admin: 
         flash('管理者ユーザーは削除できません。', 'danger')
         return redirect(url_for('admin_users'))
     
-    # ユーザーに関連するエリア割り当て (UserArea) と変更履歴 (AreaChangeLog) を削除
     UserArea.query.filter_by(user_id=user.id).delete()
     AreaChangeLog.query.filter_by(user_id=user.id).delete()
     
-    db.session.delete(user) # ユーザーを削除
-    db.session.commit() # データベースにコミット
+    db.session.delete(user) 
+    db.session.commit() 
     flash('ユーザーが正常に削除されました。', 'success')
-    return redirect(url_for('admin_users')) # ユーザー一覧ページへリダイレクト
+    return redirect(url_for('admin_users')) 
 
 
 # 事務職員による市区町村データアップロードページを表示・処理
 @app.route('/admin_upload_municipalities', methods=['GET', 'POST'])
 def admin_upload_municipalities():
-    # ログインしていない、または管理者権限がない場合はアクセス拒否
     if 'user_id' not in session or not session.get('is_admin'):
         flash('管理者権限が必要です。', 'danger')
         return redirect(url_for('login'))
@@ -601,36 +532,26 @@ def admin_upload_municipalities():
 
         if file:
             try:
-                # アップロードされたCSVファイルをpandasで読み込む
                 df = None
-                # local_gov_codeとpostal_codeを明示的に文字列として読み込む
                 read_csv_params = {'dtype': {'地方公共団体コード': str, '郵便番号': str}} 
                 
-                # まずはutf-8で試行
                 try:
-                    # streamから直接バイトを読み込み、デコードしてからStringIOに渡す
                     file_content = file.stream.read().decode('utf-8')
                     df = pd.read_csv(io.StringIO(file_content), **read_csv_params)
                 except UnicodeDecodeError:
-                    # utf-8で失敗した場合、cp932 (Shift-JIS) で再試行
-                    file.stream.seek(0) # ストリームの読み込み位置を最初に戻す
+                    file.stream.seek(0) 
                     file_content = file.stream.read().decode('cp932')
                     df = pd.read_csv(io.StringIO(file_content), **read_csv_params)
 
-                # 期待される列名
                 expected_columns = ['郵便番号', '地方公共団体コード', '都道府県', '市区町村']
-                # 列名のチェック
                 if not all(col in df.columns for col in expected_columns):
                     flash(f'CSVファイルの列名が正しくありません。以下の列が必要です: {", ".join(expected_columns)}', 'danger')
                     return render_template('admin_upload_municipalities.html')
 
-                # 既存の市区町村データを取得
                 existing_municipalities = {m.local_gov_code: m for m in Municipality.query.all()}
                 
-                # アップロードされたデータの地方公共団体コードのセット
                 uploaded_local_gov_codes = set(df['地方公共団体コード'].tolist())
 
-                # 追加される市区町村の特定
                 for index, row in df.iterrows():
                     local_gov_code = row['地方公共団体コード']
                     if local_gov_code not in existing_municipalities:
@@ -641,7 +562,6 @@ def admin_upload_municipalities():
                             city_town_village=row['市区町村']
                         ))
                 
-                # 更新される市区町村の特定
                 for local_gov_code, existing_muni in existing_municipalities.items():
                     if local_gov_code in uploaded_local_gov_codes:
                         new_data = df[df['地方公共団体コード'] == local_gov_code].iloc[0]
@@ -653,21 +573,18 @@ def admin_upload_municipalities():
                             'new_postal_code': new_data['郵便番号'],
                             'old_prefecture': existing_muni.prefecture,
                             'new_prefecture': new_data['都道府県'],
-                            'old_city_town_village': new_data['市区町村'],
+                            'old_city_town_village': existing_muni.city_town_village,
                             'new_city_town_village': new_data['市区町村']
                         }
                         
-                        # 実際の値の比較
                         if str(existing_muni.postal_code) != str(new_data['郵便番号']) or \
                            existing_muni.prefecture != new_data['都道府県'] or \
                            existing_muni.city_town_village != new_data['市区町村']:
                             is_updated = True
                             
-                        # 更新情報を追加 (変更がある場合のみ)
                         if is_updated:
                             updates.append(update_info)
 
-                # 削除される市区町村の特定
                 for local_gov_code, existing_muni in existing_municipalities.items():
                     if local_gov_code not in uploaded_local_gov_codes:
                         deletions.append(existing_muni)
@@ -675,27 +592,23 @@ def admin_upload_municipalities():
                 if not additions and not updates and not deletions:
                     flash('CSVファイルの内容は現在のデータと一致しています。変更はありませんでした。', 'info')
 
-                # プレビューデータをセッションに保存して、次の確定処理で利用できるようにする
-                session['municipality_additions'] = [m.to_dict() for m in additions] # to_dictは後で定義
+                session['municipality_additions'] = [municipality_to_dict(m) for m in additions] 
                 session['municipality_updates'] = updates
-                session['municipality_deletions'] = [m.to_dict() for m in deletions] # to_dictは後で定義
+                session['municipality_deletions'] = [municipality_to_dict(m) for m in deletions] 
 
             except Exception as e:
                 flash(f'CSVファイルの読み込みまたは解析中にエラーが発生しました: {e}', 'danger')
-                # エラー時もrender_templateを呼び出して、現在のテンプレートを再表示
                 return render_template('admin_upload_municipalities.html')
 
-    # Municipalityモデルにto_dictメソッドを追加 (セッション保存用)
     def municipality_to_dict(muni):
         return {
-            'id': muni.id,
+            'id': muni.id if hasattr(muni, 'id') else None, # idが存在しない場合を考慮
             'postal_code': muni.postal_code,
             'local_gov_code': muni.local_gov_code,
             'prefecture': muni.prefecture,
             'city_town_village': muni.city_town_village
         }
     
-    # additions, updates, deletions がセッションにある場合はそれを使用 (POSTリクエスト後の再表示用)
     additions = [Municipality(**d) for d in session.get('municipality_additions', [])]
     updates = session.get('municipality_updates', [])
     deletions = [Municipality(**d) for d in session.get('municipality_deletions', [])]
@@ -711,45 +624,35 @@ def admin_upload_municipalities():
 # 市区町村データの更新を実行するルート
 @app.route('/admin_execute_municipality_update', methods=['POST'])
 def admin_execute_municipality_update():
-    # ログインしていない、または管理者権限がない場合はアクセス拒否
     if 'user_id' not in session or not session.get('is_admin'):
         flash('管理者権限が必要です。', 'danger')
         return redirect(url_for('login'))
     
     try:
-        # セッションからプレビューデータを取得
         additions_data = session.pop('municipality_additions', [])
         updates_data = session.pop('municipality_updates', [])
         deletions_data = session.pop('municipality_deletions', [])
 
-        # 削除処理: 削除対象の市区町村IDリストを作成
         deletion_local_gov_codes = {d['local_gov_code'] for d in deletions_data}
         
         if deletion_local_gov_codes:
-            # 削除される市区町村に関連するUserAreaとAreaChangeLogをまず削除
-            # SQLAlchemyのサブクエリを使って効率的に削除
             municipalities_to_delete_ids = db.session.query(Municipality.id).filter(
                 Municipality.local_gov_code.in_(deletion_local_gov_codes)
             ).subquery()
 
-            # AreaChangeLogの削除
             AreaChangeLog.query.filter(
                 AreaChangeLog.municipality_id.in_(municipalities_to_delete_ids)
             ).delete(synchronize_session=False)
 
-            # UserAreaの削除
             UserArea.query.filter(
                 UserArea.municipality_id.in_(municipalities_to_delete_ids)
             ).delete(synchronize_session=False)
 
-            # 市区町村自体の削除
             Municipality.query.filter(
                 Municipality.local_gov_code.in_(deletion_local_gov_codes)
             ).delete(synchronize_session=False)
             print(f"市区町村データ {deletion_local_gov_codes} を削除しました。関連するUserAreaとAreaChangeLogも削除されました。")
 
-
-        # 追加処理
         for item_data in additions_data:
             new_muni = Municipality(
                 postal_code=item_data['postal_code'],
@@ -760,7 +663,6 @@ def admin_execute_municipality_update():
             db.session.add(new_muni)
             print(f"新規市区町村 {new_muni.city_town_village} を追加しました。")
 
-        # 更新処理
         for item_data in updates_data:
             existing_muni = Municipality.query.filter_by(local_gov_code=item_data['local_gov_code']).first()
             if existing_muni:
@@ -769,11 +671,11 @@ def admin_execute_municipality_update():
                 existing_muni.city_town_village = item_data['new_city_town_village']
                 print(f"市区町村 {existing_muni.city_town_village} を更新しました。")
         
-        db.session.commit() # 全ての変更をコミット
+        db.session.commit() 
         flash('市区町村データが正常に更新されました！', 'success')
 
     except Exception as e:
-        db.session.rollback() # エラー時はロールバック
+        db.session.rollback() 
         flash(f'市区町村データの更新中にエラーが発生しました: {e}', 'danger')
         print(f"市区町村データの更新エラー: {e}")
 
@@ -786,10 +688,9 @@ def index():
     return redirect(url_for('login'))
 
 
-# --- アプリケーションの実行 ---
+# --- アプリケーションの実行 (開発環境用) ---
 if __name__ == '__main__':
-    # データベースの初期化とデータ投入
-    init_db_and_data()
-    
+    # Flask開発サーバーはGunicornとは異なり、自動でinit_db_and_data()を呼び出す
+    # ここはRenderデプロイ時には実行されないため、影響はありません
     app.run(debug=True)
 

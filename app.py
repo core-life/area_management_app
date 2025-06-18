@@ -34,7 +34,7 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False) # ユーザー名はメールアドレスに固定
     name = db.Column(db.String(80), nullable=False) # 表示用の名前 (スペース除去済み)
-    password_hash = db.Column(db.String(128), nullable=False) # パスワードをハッシュ化して保存
+    password_hash = db.Column(db.String(256), nullable=False) # パスワードをハッシュ化して保存
     affiliation = db.Column(db.String(100), nullable=True) # 所属
     is_admin = db.Column(db.Boolean, default=False) # 事務職員判定用
     is_first_login = db.Column(db.Boolean, default=True) # 初回ログインフラグ

@@ -4,17 +4,20 @@ import os
 import io
 import pandas as pd
 from datetime import datetime, timedelta
-from flask import Flask, render_template, request, redirect, url_for, flash, session, Response
+from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import or_ # or_ をインポート
 
 # --- Flaskアプリケーションの初期設定 ---
 app = Flask(__name__)
-# SECRET_KEYは環境変数から取得、Renderで設定します
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_super_secret_key_for_test')
-# DATABASE_URLも環境変数から取得、Renderで設定します
+# 環境変数からSECRET_KEYを読み込む。なければデフォルト値（開発用）
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_super_secret_key_for_local_dev') 
+
+# データベースURIを環境変数から読み込む
+# RenderではDATABASE_URLという環境変数にPostgreSQLの接続情報が設定されます
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///area_management.db')
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -77,6 +80,22 @@ class AreaChangeLog(db.Model):
 # --- データベースの初期化とデータ投入関数 ---
 def init_db_and_data():
     with app.app_context():
+        # PostgreSQLの場合のURLを修正して、psycopg2-binaryが認識できるようにする
+        # 環境変数DATABASE_URLが設定されているか確認
+        if 'DATABASE_URL' in os.environ:
+            # PostgreSQLのURLの場合、psycopg2ドライバを指定するために'postgresql'を'postgresql+psycopg2'に置換
+            # RenderのDATABASE_URLは 'postgresql://' で始まるため、これを利用します
+            current_db_uri = app.config['SQLALCHEMY_DATABASE_URI']
+            if current_db_uri.startswith("postgresql://"):
+                app.config['SQLALCHEMY_DATABASE_URI'] = current_db_uri.replace("postgresql://", "postgresql+psycopg2://")
+                print(f"データベースURIをPostgreSQL用に設定しました: {app.config['SQLALCHEMY_DATABASE_URI']}")
+        else:
+            print("DATABASE_URL環境変数が設定されていないため、SQLiteを使用します。")
+
+        # データベースの再初期化（テーブルが存在する場合は削除して再作成）
+        # Renderでは永続化されないため、毎回テーブルを再作成するロジックは必要ないことが多いですが、
+        # 初期データの投入を確実にするため、もしテーブルが存在しなければ作成します。
+        # 本番環境では db.create_all() は初回のみ実行し、以降はマイグレーションツール(Alembicなど)を使用することを推奨
         db.create_all() # 全てのテーブルを作成
 
         # テスト管理者ユーザーの追加 (初回実行時のみ)
@@ -95,8 +114,7 @@ def init_db_and_data():
 
         # 古いテスト営業職員ユーザーが存在する場合は削除する（モデル変更のため）
         # 新しい営業職員は新規登録機能で作成される
-        # 注意：これは開発環境でのマイグレーションを簡素化するためのものです。本番では適切なデータ移行戦略を検討してください。
-        old_test_sales_user = User.query.filter_by(name='test_user_sales').first()
+        old_test_sales_user = User.query.filter_by(name='test_user_sales').first() # 古いnameカラムで検索
         if old_test_sales_user:
             # 関連するUserAreaとAreaChangeLogも削除
             UserArea.query.filter_by(user_id=old_test_sales_user.id).delete()
@@ -106,120 +124,50 @@ def init_db_and_data():
         db.session.commit() # 変更をコミット
 
         # 市区町村データの読み込みと投入 (初回実行時のみ)
-        # municipalities.csv ファイルからの読み込みではなく、コード内のデータを使用
-        MUNICIPALITIES_CSV_DATA = """
-郵便番号,地方公共団体コード,都道府県,市区町村
-0600000,01101,北海道,札幌市中央区
-0010000,01102,北海道,札幌市北区
-0650000,01103,北海道,札幌市東区
-0060800,01104,北海道,札幌市手稲区
-0620000,01105,北海道,札幌市豊平区
-0470000,01202,北海道,函館市
-0788200,01210,北海道,旭川市
-0850000,01206,北海道,釧路市
-0800000,01207,北海道,帯広市
-9800000,04101,宮城県,仙台市青葉区
-9830000,04102,宮城県,仙台市宮城野区
-9840000,04103,宮城県,仙台市若林区
-9820000,04104,宮城県,仙台市太白区
-9811200,04202,宮城県,名取市
-9850000,04203,宮城県,塩竈市
-1000000,13101,東京都,千代田区
-1040000,13102,東京都,中央区
-1060000,13103,東京都,港区
-1600000,13104,東京都,新宿区
-1120000,13105,東京都,文京区
-1530000,13106,東京都,目黒区
-1400000,13107,東京都,品川区
-1500000,13113,東京都,渋谷区
-1640000,13114,東京都,中野区
-1660000,13115,東京都,杉並区
-1700000,13116,東京都,豊島区
-1140000,13117,東京都,北区
-1160000,13118,東京都,荒川区
-1740000,13119,東京都,板橋区
-1200000,13120,東京都,足立区
-1240000,13121,東京都,葛飾区
-1300000,13122,東京都,墨田区
-1350000,13123,東京都,江東区
-1440000,13111,東京都,大田区
-1540000,13112,東京都,世田谷区
-1800000,13203,東京都,武蔵野市
-1900000,13204,東京都,三鷹市
-1940000,13206,東京都,町田市
-2200000,14101,神奈川県,横浜市鶴見区
-2300000,14102,神奈川県,横浜市神奈川区
-2310000,14103,神奈川県,横浜市西区
-2320000,14104,神奈川県,横浜市中区
-2350000,14105,神奈川県,横浜市南区
-2360000,14106,神奈川県,横浜市保土ケ谷区
-2380000,14107,神奈川県,横浜市磯子区
-2400000,14108,神奈川県,横浜市金沢区
-2440000,14109,神奈川県,横浜市港北区
-2450000,14110,神奈川県,横浜市戸塚区
-2500000,14201,神奈川県,川崎市川崎区
-2520000,14203,神奈川県,川崎市中原区
-2540000,14204,神奈川県,川崎市高津区
-2600000,14205,神奈川県,川崎市多摩区
-2620000,14206,神奈川県,川崎市宮前区
-4600000,23101,愛知県,名古屋市千種区
-4610000,23102,愛知県,名古屋市東区
-4530000,23103,愛知県,名古屋市北区
-4540000,23104,愛知県,名古屋市西区
-4560000,23105,愛知県,名古屋市中村区
-4600000,23106,愛知県,名古屋市中区
-4620000,23107,愛知県,名古屋市昭和区
-4630000,23108,愛知県,名古屋市瑞穂区
-4640000,23109,愛知県,名古屋市熱田区
-4650000,23110,愛知県,名古屋市中川区
-5300000,27101,大阪府,大阪市北区
-5400000,27102,大阪府,大阪市都島区
-5450000,27103,大阪府,大阪市福島区
-5500000,27104,大阪府,大阪市此花区
-5530000,27105,大阪府,大阪市中央区
-5560000,27106,大阪府,大阪市西区
-5570000,27107,大阪府,大阪市港区
-5580000,27108,大阪府,大阪市大正区
-5590000,27109,大阪府,大阪市天王寺区
-5600000,27110,大阪府,大阪市浪速区
-8100000,40101,福岡県,福岡市博多区
-8120000,40130,福岡県,福岡市中央区
-8140000,40131,福岡県,福岡市南区
-8160000,40132,福岡県,福岡市西区
-8190000,40133,福岡県,福岡市東区
-8000000,40134,福岡県,福岡市城南区
-8020000,40135,福岡県,福岡市早良区
-"""
+        csv_file_path = 'municipalities.csv'
         
-        # Municipalityテーブルが空の場合にのみ実行（本番環境では注意が必要）
-        if not Municipality.query.first(): 
-            print("CSVデータをコードからデータベースに投入します...")
+        if not Municipality.query.first() and os.path.exists(csv_file_path):
+            print(f"{csv_file_path}から市区町村データを投入します...")
             df = None
+            # local_gov_codeとpostal_codeを明示的に文字列として読み込む
+            read_csv_params = {'dtype': {'地方公共団体コード': str, '郵便番号': str}} # ★日本語列名に変更★
             try:
-                # StringIOを使って文字列データをファイルのように読み込む
-                # PostgreSQLではdtypeを指定しないか、カラム名を適切にマップする必要がある
-                df = pd.read_csv(io.StringIO(MUNICIPALITIES_CSV_DATA), dtype={'地方公共団体コード': str, '郵便番号': str}) # 日本語列名に対応
-            except Exception as e:
-                print(f"データの読み込みエラーが発生しました: {e}")
-                return 
+                # まずはutf-8で試行
+                df = pd.read_csv(csv_file_path, encoding='utf-8', **read_csv_params)
+            except UnicodeDecodeError:
+                print("utf-8での読み込みに失敗しました。cp932 (Shift-JIS) で再試行します。")
+                try:
+                    # utf-8で失敗した場合、cp932で試行
+                    df = pd.read_csv(csv_file_path, encoding='cp932', **read_csv_params)
+                except Exception as e: # より広範なエラーをキャッチ
+                    print(f"CSVファイルの読み込みエラー: cp932 (Shift-JIS) でも読み込みに失敗しました。")
+                    print(f"ファイルが壊れているか、別のエンコーディングの可能性があります。エラー: {e}")
+                    return # 処理を中断
+            except Exception as e: # その他のファイル読み込みエラー
+                print(f"CSVファイルの読み込み中に予期せぬエラーが発生しました: {e}")
+                return
 
-            if df is not None:
-                # DataFrameの列が期待通りか確認 (念のため、日本語列名でチェック)
-                expected_columns = ['郵便番号', '地方公共団体コード', '都道府県', '市区町村']
+            if df is not None: # dfが正常に読み込まれた場合のみ処理を続行
+                # DataFrameの列が期待通りか確認 (念のため)
+                expected_columns = ['郵便番号', '地方公共団体コード', '都道府県', '市区町村'] # ★日本語列名に変更★
                 if not all(col in df.columns for col in expected_columns):
                     print(f"CSVファイルの列が期待と異なります。期待される列: {expected_columns}, 実際の列: {df.columns.tolist()}")
-                    return
+                    return # 処理を中断
 
                 for index, row in df.iterrows():
                     municipality = Municipality(
-                        postal_code=row['郵便番号'],
-                        local_gov_code=row['地方公共団体コード'],
-                        prefecture=row['都道府県'],
-                        city_town_village=row['市区町村']
+                        postal_code=row['郵便番号'], # ★日本語列名から取得★
+                        local_gov_code=row['地方公共団体コード'], # ★日本語列名から取得★
+                        prefecture=row['都道府県'], # ★日本語列名から取得★
+                        city_town_village=row['市区町村'] # ★日本語列名から取得★
                     )
                     db.session.add(municipality)
                 db.session.commit()
                 print("市区町村データの投入が完了しました。")
+            else: # dfがNoneの場合 (読み込みエラーでreturnしなかったがdfがNoneの場合)
+                print("市区町村データの読み込みに失敗したため、データベースへの投入をスキップします。")
+        elif not os.path.exists(csv_file_path):
+            print(f"WARNING: {csv_file_path}が見つかりません。市区町村データが投入されません。")
         else:
             print("市区町村データは既に投入されています。")
 
@@ -304,13 +252,20 @@ def register():
         # 仮パスワードをハッシュ化して設定
         new_user.set_password(temporary_password) 
 
-        # データベースに追加・コミット
-        db.session.add(new_user)
-        db.session.commit()
+        try:
+            # データベースに追加・コミット
+            db.session.add(new_user)
+            db.session.commit()
 
-        flash(f'ユーザー登録が完了しました。初回ログイン時にパスワードを変更してください。', 'success')
-        # 仮パスワードを登録成功画面に表示 (実際はメールで送信するが今回は画面表示で代替)
-        return render_template('registration_success.html', email=email, temporary_password=temporary_password)
+            flash(f'ユーザー登録が完了しました。初回ログイン時にパスワードを変更してください。', 'success')
+            # 仮パスワードを登録成功画面に表示 (実際はメールで送信するが今回は画面表示で代替)
+            return render_template('registration_success.html', email=email, temporary_password=temporary_password)
+        except Exception as e:
+            db.session.rollback() # エラー時はロールバック
+            flash(f'ユーザー登録中にエラーが発生しました。もう一度お試しください。 ({e})', 'danger')
+            # エラー時も入力値を保持してテンプレートを再表示
+            return render_template('register.html', email=email, affiliation=affiliation, name=name)
+
     # GETリクエスト（新規登録フォーム表示）の場合の処理
     return render_template('register.html')
 
@@ -608,9 +563,6 @@ def delete_user(user_id):
         return redirect(url_for('login'))
     
     user = User.query.get_or_404(user_id) # ユーザーIDでユーザーを取得 (見つからない場合は404)
-    if user.id == session['user_id']: # ログイン中のユーザー自身は削除させない
-        flash('ご自身のアカウントは削除できません。', 'danger')
-        return redirect(url_for('admin_users'))
     if user.is_admin: # 管理者ユーザーは削除させない
         flash('管理者ユーザーは削除できません。', 'danger')
         return redirect(url_for('admin_users'))
@@ -621,143 +573,14 @@ def delete_user(user_id):
     
     db.session.delete(user) # ユーザーを削除
     db.session.commit() # データベースにコミット
-    flash(f'ユーザー "{user.name}" と関連データが削除されました。', 'success') # 成功メッセージ
+    flash('ユーザーが正常に削除されました。', 'success')
     return redirect(url_for('admin_users')) # ユーザー一覧ページへリダイレクト
 
-# エリア情報をExcelでダウンロードする機能
-@app.route('/download_excel')
-def download_excel():
-    if 'user_id' not in session or not session.get('is_admin'):
-        flash('管理者権限が必要です。', 'danger')
-        return redirect(url_for('login'))
-    
-    # 選択された月数を取得 (デフォルトは12ヶ月)
-    months_to_export = request.args.get('months', default=12, type=int)
-    # 1ヶ月から12ヶ月の範囲に制限
-    if not (1 <= months_to_export <= 12):
-        months_to_export = 12 
 
-    # ダウンロードボタンを押した日が属する月を1か月目と計算
-    # 現在時刻の年と月から、(months_to_export - 1)ヶ月前の月の1日を計算
-    current_date = datetime.utcnow() # 現在時刻 (UTC)
-    
-    # 計算を開始月を見つけるための初期設定
-    start_year = current_date.year
-    start_month = current_date.month - (months_to_export - 1)
-    
-    # 月が1以下の場合は年を減らし、月を調整
-    while start_month <= 0:
-        start_month += 12
-        start_year -= 1
-
-    # フィルタリングの開始日 (その月の1日0時0分0秒)
-    start_date_of_history = datetime(start_year, start_month, 1, 0, 0, 0, 0)
-
-
-    # 全ての市区町村データを取得 (Excel出力も地方公共団体コード順に)
-    all_municipalities = Municipality.query.order_by(
-        Municipality.local_gov_code
-    ).all()
-
-    # 営業職員のみを取得 (名前順)
-    all_users = User.query.filter_by(is_admin=False).order_by(User.name).all()
-
-    # Excelファイルとしてメモリ上に保存するためのBytesIOオブジェクト
-    output = io.BytesIO()
-    # PandasのExcelWriterを使用して複数のシートを書き込む
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # --- メインシート (対応エリア一覧) ---
-        header_main = ['郵便番号', '地方公共団体コード', '住所①', '住所②']
-        user_names_main = [user.name for user in all_users] # Excelヘッダーにユーザー名を使用
-        header_main.extend(user_names_main)
-
-        data_rows_main = []
-        for municipality in all_municipalities:
-            row_main = [
-                municipality.postal_code if municipality.postal_code else '', # 郵便番号（ない場合は空文字列）
-                municipality.local_gov_code,
-                municipality.prefecture,
-                municipality.city_town_village
-            ]
-            for user in all_users:
-                # ユーザーがその市区町村を担当しているかチェック
-                is_assigned = db.session.query(UserArea).filter_by(
-                    user_id=user.id, municipality_id=municipality.id
-                ).first() is not None
-                row_main.append('〇' if is_assigned else '') # 担当していれば「〇」、そうでなければ空文字列
-            data_rows_main.append(row_main)
-        
-        # DataFrameを作成し、Excelシートに書き込み
-        df_main = pd.DataFrame(data_rows_main, columns=header_main)
-        df_main.to_excel(writer, index=False, sheet_name='対応エリア一覧')
-
-        # --- 変更履歴シート (フィルタリング適用) ---
-        # フィルタリング期間内の変更履歴を時系列順に取得
-        history_logs = db.session.query(AreaChangeLog, Municipality, User).\
-            join(Municipality, AreaChangeLog.municipality_id == Municipality.id).\
-            join(User, AreaChangeLog.user_id == User.id).\
-            filter(AreaChangeLog.change_date >= start_date_of_history).\
-            order_by(AreaChangeLog.change_date.asc()).all() 
-
-        # 月ごとの変更を辞書に集計
-        # 例: {'YYYY年MM月': {'ユーザー名': {'assigned': [エリア名1, ...], 'unassigned': [エリア名2, ...]}, ...}}
-        monthly_changes = {} 
-        for log, muni, user in history_logs:
-            change_month = log.change_date.strftime('%Y年%m月') # 変更があった年月
-            user_name = user.name # 変更を行ったユーザーの名前
-            area_name = f"{muni.prefecture}{muni.city_town_village}" # エリア名
-            change_type = log.change_type # 'assigned' or 'unassigned'
-
-            # 辞書構造を初期化
-            if change_month not in monthly_changes:
-                monthly_changes[change_month] = {}
-            if user_name not in monthly_changes[change_month]:
-                monthly_changes[change_month][user_name] = {'assigned': [], 'unassigned': []}
-            
-            # 変更内容をリストに追加
-            monthly_changes[change_month][user_name][change_type].append(area_name)
-        
-        # 集計データをDataFrameに変換するためのリスト
-        history_data_summary = []
-        # 月、ユーザー名の順でソートしてデータを整形
-        for month in sorted(monthly_changes.keys()):
-            for user_name in sorted(monthly_changes[month].keys()):
-                assigned_areas = "、".join(monthly_changes[month][user_name]['assigned']) # 追加されたエリアをカンマ区切りで結合
-                unassigned_areas = "、".join(monthly_changes[month][user_name]['unassigned']) # 削除されたエリアをカンマ区切りで結合
-                
-                history_data_summary.append({
-                    '対象月': month,
-                    '営業職員名': user_name,
-                    '対応可能エリア追加': assigned_areas,
-                    '対応可能エリア削除': unassigned_areas
-                })
-        
-        # 履歴のDataFrameを作成
-        df_history = pd.DataFrame(history_data_summary)
-        
-        # データがある場合のみシートを追加。ない場合はメッセージを記載したシートを作成
-        if not df_history.empty:
-            df_history.to_excel(writer, index=False, sheet_name='エリア変更履歴_月次')
-        else:
-            empty_df = pd.DataFrame({'メッセージ': ['選択された期間のエリア変更履歴はありません。']})
-            empty_df.to_excel(writer, index=False, sheet_name='エリア変更履歴_月次')
-
-    # BytesIOオブジェクトの先頭にシーク
-    output.seek(0) 
-
-    # ファイル名に現在の日時（年、月、日、時、分、秒）を含める
-    filename = f"area_list_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx"
-
-    # 生成したExcelファイルをHTTPレスポンスとして返す
-    return Response(
-        output.getvalue(),
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        headers={"Content-Disposition": f"attachment;filename={filename}"}
-    )
-
-# --- 新しい市区町村データ一括更新機能 ---
+# 事務職員による市区町村データアップロードページを表示・処理
 @app.route('/admin_upload_municipalities', methods=['GET', 'POST'])
 def admin_upload_municipalities():
+    # ログインしていない、または管理者権限がない場合はアクセス拒否
     if 'user_id' not in session or not session.get('is_admin'):
         flash('管理者権限が必要です。', 'danger')
         return redirect(url_for('login'))
@@ -765,198 +588,208 @@ def admin_upload_municipalities():
     additions = []
     updates = []
     deletions = []
-    processing_error = None
 
     if request.method == 'POST':
         if 'file' not in request.files:
-            flash('ファイルが選択されていません。', 'danger')
+            flash('ファイルがアップロードされていません。', 'danger')
             return redirect(request.url)
         
         file = request.files['file']
         if file.filename == '':
             flash('ファイルが選択されていません。', 'danger')
             return redirect(request.url)
-        
-        if file and file.filename.endswith('.csv'):
+
+        if file:
             try:
-                # ファイルをメモリに読み込み、Pandasで処理
-                file_content = io.BytesIO(file.read())
+                # アップロードされたCSVファイルをpandasで読み込む
                 df = None
-                # ★日本語列名を指定して読み込む★
+                # local_gov_codeとpostal_codeを明示的に文字列として読み込む
                 read_csv_params = {'dtype': {'地方公共団体コード': str, '郵便番号': str}} 
                 
+                # まずはutf-8で試行
                 try:
-                    df = pd.read_csv(file_content, encoding='utf-8', **read_csv_params)
+                    # streamから直接バイトを読み込み、デコードしてからStringIOに渡す
+                    file_content = file.stream.read().decode('utf-8')
+                    df = pd.read_csv(io.StringIO(file_content), **read_csv_params)
                 except UnicodeDecodeError:
-                    file_content.seek(0) # ストリームを先頭に戻す
-                    df = pd.read_csv(file_content, encoding='cp932', **read_csv_params)
+                    # utf-8で失敗した場合、cp932 (Shift-JIS) で再試行
+                    file.stream.seek(0) # ストリームの読み込み位置を最初に戻す
+                    file_content = file.stream.read().decode('cp932')
+                    df = pd.read_csv(io.StringIO(file_content), **read_csv_params)
 
-                # ★期待される列名も日本語に★
-                expected_columns = ['郵便番号', '地方公共団体コード', '都道府県', '市区町村'] 
+                # 期待される列名
+                expected_columns = ['郵便番号', '地方公共団体コード', '都道府県', '市区町村']
+                # 列名のチェック
                 if not all(col in df.columns for col in expected_columns):
-                    processing_error = f"CSVファイルの列が期待と異なります。期待される列: {expected_columns}, 実際の列: {df.columns.tolist()}"
+                    flash(f'CSVファイルの列名が正しくありません。以下の列が必要です: {", ".join(expected_columns)}', 'danger')
+                    return render_template('admin_upload_municipalities.html')
+
+                # 既存の市区町村データを取得
+                existing_municipalities = {m.local_gov_code: m for m in Municipality.query.all()}
                 
-                # local_gov_code の重複チェック (日本語列名でアクセス)
-                if df['地方公共団体コード'].duplicated().any(): # ★日本語列名に変更★
-                    duplicate_codes = df[df['地方公共団体コード'].duplicated()]['地方公共団体コード'].tolist() # ★日本語列名に変更★
-                    processing_error = f"CSVファイル内に重複する地方公共団体コードがあります: {', '.join(duplicate_codes)}"
+                # アップロードされたデータの地方公共団体コードのセット
+                uploaded_local_gov_codes = set(df['地方公共団体コード'].tolist())
 
-                if not processing_error:
-                    # 既存の市区町村データを取得し、地方公共団体コードをキーとする辞書を作成
-                    existing_municipalities = {
-                        m.local_gov_code: m for m in Municipality.query.all()
-                    }
-                    existing_codes = set(existing_municipalities.keys())
-                    new_codes = set()
+                # 追加される市区町村の特定
+                for index, row in df.iterrows():
+                    local_gov_code = row['地方公共団体コード']
+                    if local_gov_code not in existing_municipalities:
+                        additions.append(Municipality(
+                            postal_code=row['郵便番号'],
+                            local_gov_code=local_gov_code,
+                            prefecture=row['都道府県'],
+                            city_town_village=row['市区町村']
+                        ))
+                
+                # 更新される市区町村の特定
+                for local_gov_code, existing_muni in existing_municipalities.items():
+                    if local_gov_code in uploaded_local_gov_codes:
+                        new_data = df[df['地方公共団体コード'] == local_gov_code].iloc[0]
+                        
+                        is_updated = False
+                        update_info = {
+                            'local_gov_code': local_gov_code,
+                            'old_postal_code': existing_muni.postal_code,
+                            'new_postal_code': new_data['郵便番号'],
+                            'old_prefecture': existing_muni.prefecture,
+                            'new_prefecture': new_data['都道府県'],
+                            'old_city_town_village': new_data['市区町村'],
+                            'new_city_town_village': new_data['市区町村']
+                        }
+                        
+                        # 実際の値の比較
+                        if str(existing_muni.postal_code) != str(new_data['郵便番号']) or \
+                           existing_muni.prefecture != new_data['都道府県'] or \
+                           existing_muni.city_town_village != new_data['市区町村']:
+                            is_updated = True
+                            
+                        # 更新情報を追加 (変更がある場合のみ)
+                        if is_updated:
+                            updates.append(update_info)
 
-                    for index, row in df.iterrows():
-                        local_gov_code = str(row['地方公共団体コード']).strip() # ★日本語列名から取得★
-                        new_codes.add(local_gov_code)
+                # 削除される市区町村の特定
+                for local_gov_code, existing_muni in existing_municipalities.items():
+                    if local_gov_code not in uploaded_local_gov_codes:
+                        deletions.append(existing_muni)
+                
+                if not additions and not updates and not deletions:
+                    flash('CSVファイルの内容は現在のデータと一致しています。変更はありませんでした。', 'info')
 
-                        # CSVデータの整形（NoneやNaNを空文字列に変換） - ★日本語列名から取得★
-                        postal_code = str(row['郵便番号']).strip() if pd.notna(row['郵便番号']) else ''
-                        prefecture = str(row['都道府県']).strip() if pd.notna(row['都道府県']) else ''
-                        city_town_village = str(row['市区町村']).strip() if pd.notna(row['市区町村']) else ''
+                # プレビューデータをセッションに保存して、次の確定処理で利用できるようにする
+                session['municipality_additions'] = [m.to_dict() for m in additions] # to_dictは後で定義
+                session['municipality_updates'] = updates
+                session['municipality_deletions'] = [m.to_dict() for m in deletions] # to_dictは後で定義
 
-                        if local_gov_code in existing_codes:
-                            # 既存の市区町村を更新
-                            existing_muni = existing_municipalities[local_gov_code]
-                            # 変更があったかチェック
-                            if (existing_muni.postal_code != postal_code or
-                                existing_muni.prefecture != prefecture or
-                                existing_muni.city_town_village != city_town_village):
-                                updates.append({
-                                    'local_gov_code': local_gov_code,
-                                    'old_postal_code': existing_muni.postal_code,
-                                    'new_postal_code': postal_code,
-                                    'old_prefecture': existing_muni.prefecture,
-                                    'new_prefecture': prefecture,
-                                    'old_city_town_village': existing_muni.city_town_village,
-                                    'new_city_town_village': city_town_village
-                                })
-                        else:
-                            # 新規追加
-                            additions.append({
-                                'postal_code': postal_code,
-                                'local_gov_code': local_gov_code,
-                                'prefecture': prefecture,
-                                'city_town_village': city_town_village
-                            })
-                    
-                    # 削除される市区町村を特定
-                    deletions_codes = existing_codes - new_codes
-                    for code in deletions_codes:
-                        muni = existing_municipalities[code]
-                        deletions.append({
-                            'postal_code': muni.postal_code,
-                            'local_gov_code': muni.local_gov_code,
-                            'prefecture': muni.prefecture,
-                            'city_town_village': muni.city_town_village
-                        })
-                    
-                    # プレビューデータをセッションに保存
-                    session['pending_additions'] = additions
-                    session['pending_updates'] = updates
-                    session['pending_deletions'] = deletions
-
-                    if not additions and not updates and not deletions:
-                        flash('CSVファイルと既存のデータに差異はありませんでした。', 'info')
-                        return redirect(url_for('admin_dashboard')) # 変更がない場合はダッシュボードへ戻る
-                    else:
-                        flash('CSVデータを読み込みました。以下の変更が適用されます。内容を確認し「確定して実行」してください。', 'info')
-
-            except pd.errors.EmptyDataError:
-                processing_error = 'CSVファイルが空です。'
-            except pd.errors.ParserError:
-                processing_error = 'CSVファイルの解析に失敗しました。形式を確認してください。'
-            except UnicodeDecodeError:
-                processing_error = 'CSVファイルのエンコーディングがUTF-8またはShift-JISではありません。'
             except Exception as e:
-                processing_error = f'CSV処理中にエラーが発生しました: {e}'
-            
-            if processing_error:
-                flash(f'CSV処理エラー: {processing_error}', 'danger')
-                # エラーの場合はプレビューデータをクリア
-                session.pop('pending_additions', None)
-                session.pop('pending_updates', None)
-                session.pop('pending_deletions', None)
+                flash(f'CSVファイルの読み込みまたは解析中にエラーが発生しました: {e}', 'danger')
+                # エラー時もrender_templateを呼び出して、現在のテンプレートを再表示
+                return render_template('admin_upload_municipalities.html')
 
-        else:
-            flash('CSVファイルを選択してください。', 'danger')
+    # Municipalityモデルにto_dictメソッドを追加 (セッション保存用)
+    def municipality_to_dict(muni):
+        return {
+            'id': muni.id,
+            'postal_code': muni.postal_code,
+            'local_gov_code': muni.local_gov_code,
+            'prefecture': muni.prefecture,
+            'city_town_village': muni.city_town_village
+        }
+    
+    # additions, updates, deletions がセッションにある場合はそれを使用 (POSTリクエスト後の再表示用)
+    additions = [Municipality(**d) for d in session.get('municipality_additions', [])]
+    updates = session.get('municipality_updates', [])
+    deletions = [Municipality(**d) for d in session.get('municipality_deletions', [])]
+
 
     return render_template(
         'admin_upload_municipalities.html',
-        additions=session.get('pending_additions', []),
-        updates=session.get('pending_updates', []),
-        deletions=session.get('pending_deletions', [])
+        additions=additions,
+        updates=updates,
+        deletions=deletions
     )
 
+# 市区町村データの更新を実行するルート
 @app.route('/admin_execute_municipality_update', methods=['POST'])
 def admin_execute_municipality_update():
+    # ログインしていない、または管理者権限がない場合はアクセス拒否
     if 'user_id' not in session or not session.get('is_admin'):
         flash('管理者権限が必要です。', 'danger')
         return redirect(url_for('login'))
-
-    # セッションからプレビューデータを取得
-    additions = session.pop('pending_additions', [])
-    updates = session.pop('pending_updates', [])
-    deletions = session.pop('pending_deletions', [])
-
-    if not additions and not updates and not deletions:
-        flash('適用する変更がありません。', 'warning')
-        return redirect(url_for('admin_dashboard'))
-
+    
     try:
-        # 削除の実行 (関連データも削除)
-        for muni_data in deletions:
-            muni_to_delete = Municipality.query.filter_by(local_gov_code=muni_data['local_gov_code']).first()
-            if muni_to_delete:
-                # 関連するUserAreaとAreaChangeLogをまず削除
-                UserArea.query.filter_by(municipality_id=muni_to_delete.id).delete()
-                AreaChangeLog.query.filter_by(municipality_id=muni_to_delete.id).delete()
-                db.session.delete(muni_to_delete)
+        # セッションからプレビューデータを取得
+        additions_data = session.pop('municipality_additions', [])
+        updates_data = session.pop('municipality_updates', [])
+        deletions_data = session.pop('municipality_deletions', [])
+
+        # 削除処理: 削除対象の市区町村IDリストを作成
+        deletion_local_gov_codes = {d['local_gov_code'] for d in deletions_data}
         
-        # 追加の実行
-        for muni_data in additions:
-            new_municipality = Municipality(
-                postal_code=muni_data['postal_code'],
-                local_gov_code=muni_data['local_gov_code'],
-                prefecture=muni_data['prefecture'],
-                city_town_village=muni_data['city_town_village']
+        if deletion_local_gov_codes:
+            # 削除される市区町村に関連するUserAreaとAreaChangeLogをまず削除
+            # SQLAlchemyのサブクエリを使って効率的に削除
+            municipalities_to_delete_ids = db.session.query(Municipality.id).filter(
+                Municipality.local_gov_code.in_(deletion_local_gov_codes)
+            ).subquery()
+
+            # AreaChangeLogの削除
+            AreaChangeLog.query.filter(
+                AreaChangeLog.municipality_id.in_(municipalities_to_delete_ids)
+            ).delete(synchronize_session=False)
+
+            # UserAreaの削除
+            UserArea.query.filter(
+                UserArea.municipality_id.in_(municipalities_to_delete_ids)
+            ).delete(synchronize_session=False)
+
+            # 市区町村自体の削除
+            Municipality.query.filter(
+                Municipality.local_gov_code.in_(deletion_local_gov_codes)
+            ).delete(synchronize_session=False)
+            print(f"市区町村データ {deletion_local_gov_codes} を削除しました。関連するUserAreaとAreaChangeLogも削除されました。")
+
+
+        # 追加処理
+        for item_data in additions_data:
+            new_muni = Municipality(
+                postal_code=item_data['postal_code'],
+                local_gov_code=item_data['local_gov_code'],
+                prefecture=item_data['prefecture'],
+                city_town_village=item_data['city_town_village']
             )
-            db.session.add(new_municipality)
+            db.session.add(new_muni)
+            print(f"新規市区町村 {new_muni.city_town_village} を追加しました。")
+
+        # 更新処理
+        for item_data in updates_data:
+            existing_muni = Municipality.query.filter_by(local_gov_code=item_data['local_gov_code']).first()
+            if existing_muni:
+                existing_muni.postal_code = item_data['new_postal_code']
+                existing_muni.prefecture = item_data['new_prefecture']
+                existing_muni.city_town_village = item_data['new_city_town_village']
+                print(f"市区町村 {existing_muni.city_town_village} を更新しました。")
         
-        # 更新の実行
-        for muni_data in updates:
-            muni_to_update = Municipality.query.filter_by(local_gov_code=muni_data['local_gov_code']).first()
-            if muni_to_update:
-                muni_to_update.postal_code = muni_data['new_postal_code']
-                muni_to_update.prefecture = muni_data['new_prefecture']
-                muni_to_update.city_town_village = muni_data['new_city_town_village']
-        
-        db.session.commit()
-        flash(f'市区町村データが正常に更新されました！ (追加: {len(additions)}件, 更新: {len(updates)}件, 削除: {len(deletions)}件)', 'success')
+        db.session.commit() # 全ての変更をコミット
+        flash('市区町村データが正常に更新されました！', 'success')
 
     except Exception as e:
         db.session.rollback() # エラー時はロールバック
         flash(f'市区町村データの更新中にエラーが発生しました: {e}', 'danger')
-        # エラー発生時は、再度プレビューデータがセッションに残るようにする
-        session['pending_additions'] = additions
-        session['pending_updates'] = updates
-        session['pending_deletions'] = deletions
-    
+        print(f"市区町村データの更新エラー: {e}")
+
     return redirect(url_for('admin_dashboard'))
 
-# トップページにアクセスした際にログインページへリダイレクト
+
+# トップページをログインページにリダイレクト
 @app.route('/')
 def index():
     return redirect(url_for('login'))
+
 
 # --- アプリケーションの実行 ---
 if __name__ == '__main__':
     # データベースの初期化とデータ投入
     init_db_and_data()
     
-    # Flaskアプリケーションを起動
-    # debug=True にすると、コード変更時に自動で再起動し、デバッグ情報が表示されます。
     app.run(debug=True)
+

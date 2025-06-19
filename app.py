@@ -532,6 +532,85 @@ def admin_dashboard():
         municipality_user_map=municipality_user_map
     )
 
+# 事務職員によるユーザー管理ページ（一覧表示）
+@app.route('/admin_users')
+def admin_users():
+    if 'user_id' not in session or not session.get('is_admin'):
+        flash('管理者権限が必要です。', 'danger')
+        return redirect(url_for('login'))
+    
+    users = User.query.order_by(User.email).all() 
+    return render_template('admin_users.html', users=users)
+
+# 事務職員によるユーザー編集ページ
+@app.route('/edit_user/<int:user_id>', methods=['GET', 'POST'])
+def edit_user(user_id):
+    if 'user_id' not in session or not session.get('is_admin'):
+        flash('管理者権限が必要です。', 'danger')
+        return redirect(url_for('login'))
+    
+    user = User.query.get_or_404(user_id) 
+    
+    if user.id == session['user_id'] and user.is_admin:
+        flash('ご自身の管理者権限は変更できません。', 'danger')
+        return redirect(url_for('admin_users'))
+
+    if request.method == 'POST':
+        new_email = request.form['email'].strip() 
+        new_name = request.form['name'].replace(' ', '').replace('　', '').strip() 
+        new_affiliation = request.form['affiliation'].strip() 
+        reset_password_flag = 'reset_password' in request.form 
+        new_is_admin_status = 'is_admin' in request.form 
+
+        if not new_email.endswith('@clp-ytmm.com'):
+            flash('メールアドレスは "@clp-ytmm.com" ドメインである必要があります。', 'danger')
+            return render_template('edit_user.html', user=user) 
+
+        if new_email != user.email and User.query.filter_by(email=new_email).first():
+            flash('このメールアドレスは既に他のユーザーに登録されています。', 'danger')
+            return render_template('edit_user.html', user=user) 
+
+        user.email = new_email
+        user.name = new_name
+        user.affiliation = new_affiliation
+        user.is_admin = new_is_admin_status 
+        
+        if reset_password_flag:
+            temporary_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for i in range(8))
+            user.set_password(temporary_password)
+            user.is_first_login = True
+            flash(f'ユーザー情報を更新し、パスワードをリセットしました。新しい仮パスワード: {temporary_password} (初回ログイン時に変更が必要です)', 'success')
+        else:
+            flash('ユーザー情報が更新されました。', 'success')
+        
+        db.session.commit() 
+        return redirect(url_for('admin_users')) 
+    
+    return render_template('edit_user.html', user=user)
+
+# 事務職員によるユーザー削除機能
+@app.route('/delete_user/<int:user_id>', methods=['POST'])
+def delete_user(user_id):
+    if 'user_id' not in session or not session.get('is_admin'):
+        flash('管理者権限が必要です。', 'danger')
+        return redirect(url_for('login'))
+    
+    user = User.query.get_or_404(user_id) 
+    if user.id == session['user_id']: # ログイン中のユーザー自身は削除させない
+        flash('ご自身のアカウントは削除できません。', 'danger')
+        return redirect(url_for('admin_users'))
+    if user.is_admin: 
+        flash('管理者ユーザーは削除できません。', 'danger')
+        return redirect(url_for('admin_users'))
+    
+    UserArea.query.filter_by(user_id=user.id).delete()
+    AreaChangeLog.query.filter_by(user_id=user.id).delete()
+    
+    db.session.delete(user) 
+    db.session.commit() 
+    flash(f'ユーザー "{user.name}" と関連データが削除されました。', 'success')
+    return redirect(url_for('admin_users')) 
+
 # エリア情報をExcelでダウンロードする機能
 @app.route('/download_excel', defaults={'months': 12}) # デフォルト引数を追加
 @app.route('/download_excel/<int:months>') # months引数を受け取るように修正

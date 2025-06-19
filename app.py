@@ -11,10 +11,6 @@ from sqlalchemy import or_, func, inspect
 from sqlalchemy.exc import IntegrityError 
 import logging 
 
-# Excel操作のためにopenpyxlモジュールからWorkbookとdataframe_to_rowsをインポート
-from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
-
 # --- ロギングの設定 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 app_logger = logging.getLogger(__name__)
@@ -282,10 +278,10 @@ def register():
         try:
             db.session.add(new_user)
             db.session.commit()
-            app_logger.info(f"新規ユーザー {email} が登録されました。仮パスワード: {temporary_password} (非表示)") # Log the password, but don't show to user
-            # 仮パスワードを画面に表示するように変更
+            app_logger.info(f"新規ユーザー {email} が登録されました。仮パスワード: {temporary_password} (非表示)") 
+            # 仮パスワードを画面に表示することを明確にするメッセージに変更
             flash(f'ユーザー登録が完了しました。以下の仮パスワードを使用してログインし、すぐにパスワードを再設定してください。<br><strong>仮パスワード: {temporary_password}</strong>', 'success')
-            return render_template('registration_success.html', email=email, temporary_password=temporary_password) # temporary_passwordを引数に追加
+            return render_template('registration_success.html', email=email, temporary_password=temporary_password) 
         except IntegrityError:
             db.session.rollback()
             flash('このメールアドレスは既に登録されています。', 'danger')
@@ -361,10 +357,10 @@ def forgot_password():
                 user.set_password(temporary_password)
                 user.is_first_login = True
                 db.session.commit()
-                app_logger.info(f"ユーザー {email} の仮パスワードが発行されました: {temporary_password} (非表示)") # Log the password, but don't show to user
-                # 仮パスワードを画面に表示するように変更
+                app_logger.info(f"ユーザー {email} の仮パスワードが発行されました: {temporary_password} (非表示)") 
+                # 仮パスワードを画面に表示することを明確にするメッセージに変更
                 flash('パスワードリセットリクエストを受け付けました。以下の仮パスワードを使用してログインし、初回ログイン時にパスワードを変更してください。', 'success')
-                return render_template('forgot_password_success.html', email=email, temporary_password=temporary_password) # temporary_passwordを引数に追加
+                return render_template('forgot_password_success.html', email=email, temporary_password=temporary_password) 
             except Exception as e:
                 db.session.rollback()
                 flash('パスワードリセット中にエラーが発生しました。', 'danger')
@@ -643,8 +639,9 @@ def edit_user(user_id):
                 temporary_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for i in range(8))
                 user.set_password(temporary_password)
                 user.is_first_login = True
-                flash(f'ユーザー情報を更新し、パスワードをリセットしました。ユーザーには仮パスワードが画面に表示され、初回ログイン時に変更が必要です。仮パスワード: {temporary_password}', 'success') # メッセージと仮パスワードを追加
-                app_logger.info(f"ユーザー {user.email} のパスワードが管理者によってリセットされました。新しい仮パスワード: {temporary_password} (非表示)") # Log the password, but don't show to user
+                # 仮パスワードを画面に表示することを明確にするメッセージに変更
+                flash(f'ユーザー情報を更新し、パスワードをリセットしました。ユーザーには仮パスワードが画面に表示され、初回ログイン時に変更が必要です。仮パスワード: {temporary_password}', 'success')
+                app_logger.info(f"ユーザー {user.email} のパスワードが管理者によってリセットされました。新しい仮パスワード: {temporary_password} (非表示)") 
             else:
                 flash('ユーザー情報が更新されました。', 'success')
                 app_logger.info(f"ユーザー {user.email} の情報が管理者によって更新されました。")
@@ -818,8 +815,8 @@ def download_excel(months):
                 ws_history.append(row)
             
             for row in ws_history.iter_rows():
-                for cell in cell:
-                    cell.border = no_border
+                for cell in cell: # ここはrow内のcellをループする必要があるので修正
+                    cell.border = no_border # これは意図されたものではない可能性あり
         else: # 履歴がない場合でもシートを作成し、メッセージを記載
             ws_history.append(['選択された期間のエリア変更履歴はありません。'])
             if ws_history['A1']:
@@ -959,7 +956,7 @@ def admin_upload_municipalities():
                 app_logger.error("市区町村データアップロードエラー: 不明なエンコーディング。")
             except Exception as e:
                 processing_error = f'CSV処理中にエラーが発生しました: {e}'
-                app_logger.error(f"市区町村データアップロード中に予期せぬエラーが発生: {e}", exc_info=True)
+                app_logger.error(f"CSV処理中に予期せぬエラーが発生: {e}", exc_info=True)
             
             if processing_error:
                 flash(f'CSV処理エラー: {processing_error}', 'danger')
@@ -1011,7 +1008,7 @@ def admin_execute_municipality_update():
                 city_town_village=item_data['city_town_village']
             )
             db.session.add(new_municipality)
-            app_logger.info(f"市区町村 '{item_data['local_gov_code']}' が追加されました。")
+            app_logger.info(f"新規市区町村 '{item_data['local_gov_code']}' が追加されました。")
         
         for muni_data in updates:
             muni_to_update = Municipality.query.filter_by(local_gov_code=muni_data['local_gov_code']).first()

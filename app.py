@@ -89,6 +89,11 @@ def init_db_and_data():
     with app.app_context():
         app_logger.info("データベースの初期化とデータ投入を開始します。")
         try:
+            # 古いデータベースファイルが存在する場合は削除（スキーマ変更のため）
+            if os.path.exists('area_management.db'):
+                os.remove('area_management.db')
+                app_logger.info("既存のデータベースファイル 'area_management.db' を削除しました。")
+            
             db.create_all() # 全てのテーブルを作成
             app_logger.info("データベーステーブルが作成されました。")
         except Exception as e:
@@ -121,6 +126,7 @@ def init_db_and_data():
             app_logger.info(f"管理者ユーザー {admin_email} は既に存在します。")
 
         # 古いテスト営業職員ユーザーが存在する場合は削除する（モデル変更のため）
+        # この部分は、データベース削除によって不要になる可能性が高いですが、念のため残しておきます。
         old_test_sales_user = User.query.filter_by(name='test_user_sales').first()
         if old_test_sales_user:
             try:

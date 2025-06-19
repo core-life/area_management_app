@@ -7,25 +7,29 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, flash, session, Response
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
-from sqlalchemy import or_, func, inspect # inspectをインポート
-from sqlalchemy.exc import IntegrityError # IntegrityErrorをインポート
-from openpyxl.styles import Border, Side, Alignment, Font
-from openpyxl.utils import get_column_letter
-from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
-import logging # loggingモジュールをインポート
+from sqlalchemy import or_, func, inspect 
+from sqlalchemy.exc import IntegrityError 
+import logging 
 
 # --- ロギングの設定 ---
-# アプリケーションのログレベルを設定 (開発中はDEBUG、本番ではINFO/WARNINGなど)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 app_logger = logging.getLogger(__name__)
 
 # --- Flaskアプリケーションの初期設定 ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_super_secret_key_for_test')
+
 # RenderでPostgreSQLを使う場合は、環境変数DATABASE_URLを設定します。
 # SQLiteを使う場合は、下記の設定のままですが、データは永続化されません。
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///area_management.db')
+# Renderの ephemeral filesystem に対応するため、絶対パスで指定
+if os.environ.get('DATABASE_URL'):
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
+else:
+    # Renderのプロジェクトルートからの相対パスでSQLiteファイルを指定
+    # Render環境では /opt/render/project/src がプロジェクトのルート
+    sqlite_db_path = os.path.join(os.getcwd(), 'instance', 'area_management.db')
+    app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{sqlite_db_path}'
+    
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -91,19 +95,25 @@ def init_db_and_data():
     with app.app_context():
         app_logger.info("データベースの初期化とデータ投入を開始します。")
         
-        # データベースの状態をチェック
         inspector = inspect(db.engine)
-        # 少なくともuserテーブルが存在しない場合、または全てのテーブルが存在しない場合、テーブルを再作成
-        # これはRenderのEphemeral filesystem上のSQLiteでのみ機能し、データは永続化されません。
-        # PostgreSQLを使う場合は、初回デプロイ時にのみdb.create_all()を実行するように調整が必要です。
-        if not inspector.has_table("user"):
-            app_logger.warning("データベーススキーマが不完全、または存在しません。テーブルを再作成します。")
-            # 既存のテーブルをすべて削除してから作成（開発/デモ目的でのクリーンスタートに有効）
+        
+        # データベースがPostgreSQLではなく、かつuserテーブルが存在しない場合にのみ再作成
+        # RenderのEphemeral filesystem上のSQLiteでのみ機能し、データは永続化されません。
+        # PostgreSQLを使う場合は、DB_URLが設定されているためこのブロックはスキップされます。
+        if not inspector.has_table("user") and not os.environ.get('DATABASE_URL'):
+            app_logger.warning("SQLiteデータベーススキーマが不完全、または存在しません。テーブルを再作成します。")
+            
+            # instanceフォルダが存在しない場合は作成
+            instance_path = os.path.join(os.getcwd(), 'instance')
+            if not os.path.exists(instance_path):
+                os.makedirs(instance_path)
+                app_logger.info(f"'{instance_path}' フォルダを作成しました。")
+
             db.drop_all() 
             db.create_all() 
             app_logger.info("データベーステーブルが作成されました。")
         else:
-            app_logger.info("データベーステーブルは既に存在します。")
+            app_logger.info("データベーステーブルは既に存在するか、PostgreSQLが使用されています。")
 
         # テスト管理者ユーザーの追加 (初回実行時のみ)
         admin_email = 'admin@clp-ytmm.com'
@@ -343,7 +353,7 @@ def forgot_password():
                 user.is_first_login = True
                 db.session.commit()
                 app_logger.info(f"ユーザー {email} の仮パスワードが発行されました: {temporary_password} (非表示)") # Log the password, but don't show to user
-                flash('パスワードリセットリクエストを受け付けました。新しい仮パスワードを <span class="font-semibold">{email}</span> 宛に送信しました。', 'success')
+                flash('パスワードリセットリクエストを受け付けました。新しい仮パスワードを <span class="font-semibold">{email}</span> 宛に送信しました。初回ログイン時にパスワードを変更してください。', 'success')
                 return render_template('forgot_password_success.html', email=email) # Removed temporary_password
             except Exception as e:
                 db.session.rollback()

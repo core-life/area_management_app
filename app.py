@@ -7,7 +7,8 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, flash, session, Response
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
-from sqlalchemy import or_ # or_ をインポート
+from sqlalchemy import or_, func # funcをインポート
+from openpyxl.styles import Border, Side # BorderとSideをインポート
 
 # --- Flaskアプリケーションの初期設定 ---
 app = Flask(__name__)
@@ -412,8 +413,14 @@ def sales_dashboard():
     user_areas = UserArea.query.filter_by(user_id=current_user_id).all()
     user_selected_municipality_ids = {ua.municipality_id for ua in user_areas}
 
-    # 重複しない都道府県リストを作成 (ソート済み)
-    prefectures = sorted(list(set(m.prefecture for m in municipalities)))
+    # 都道府県を地方公共団体コード順で取得
+    # 各都道府県の最小の地方公共団体コードを取得し、それに基づいてソート
+    prefecture_codes = db.session.query(
+        Municipality.prefecture,
+        func.min(Municipality.local_gov_code).label('min_local_gov_code')
+    ).group_by(Municipality.prefecture).order_by('min_local_gov_code').all()
+    
+    prefectures = [p.prefecture for p in prefecture_codes] # prefecturesリストを更新
 
     return render_template(
         'sales_dashboard.html',
@@ -676,8 +683,26 @@ def download_excel(months): # 関数シグネチャにmonthsを追加
         df_main = pd.DataFrame(data_rows_main, columns=header_main)
         df_main.to_excel(writer, index=False, sheet_name='対応エリア一覧')
 
+        # ExcelWriterのwriterオブジェクトからWorkbookを取得
+        workbook = writer.book
+        
+        # --- 「対応エリア一覧」シートの書式設定 ---
+        if '対応エリア一覧' in workbook.sheetnames:
+            sheet_main = workbook['対応エリア一覧']
+            
+            # 「住所②」列の幅を設定 (D列)
+            sheet_main.column_dimensions['D'].width = 20.75
+
+            # すべてのセルから罫線を削除
+            no_border = Border(left=Side(style=None), 
+                               right=Side(style=None), 
+                               top=Side(style=None), 
+                               bottom=Side(style=None))
+            for row in sheet_main.iter_rows():
+                for cell in row:
+                    cell.border = no_border
+
         # --- 変更履歴シート (フィルタリング適用) ---
-        # フィルタリング期間内の変更履歴を時系列順に取得
         history_logs = db.session.query(AreaChangeLog, Municipality, User).\
             join(Municipality, AreaChangeLog.municipality_id == Municipality.id).\
             join(User, AreaChangeLog.user_id == User.id).\
@@ -723,9 +748,20 @@ def download_excel(months): # 関数シグネチャにmonthsを追加
         # データがある場合のみシートを追加。ない場合はメッセージを記載したシートを作成
         if not df_history.empty:
             df_history.to_excel(writer, index=False, sheet_name='エリア変更履歴_月次')
+            # --- 「エリア変更履歴_月次」シートの書式設定 ---
+            sheet_history = workbook['エリア変更履歴_月次']
+            # すべてのセルから罫線を削除
+            for row in sheet_history.iter_rows():
+                for cell in row:
+                    cell.border = no_border # 上で定義したno_borderを使用
         else:
             empty_df = pd.DataFrame({'メッセージ': ['選択された期間のエリア変更履歴はありません。']})
             empty_df.to_excel(writer, index=False, sheet_name='エリア変更履歴_月次')
+            sheet_history = workbook['エリア変更履歴_月次'] # empty_dfでもシートは作成されるので取得
+            for row in sheet_history.iter_rows():
+                for cell in row:
+                    cell.border = no_border
+
 
     # BytesIOオブジェクトの先頭にシーク
     output.seek(0) 

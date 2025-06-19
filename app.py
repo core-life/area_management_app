@@ -233,6 +233,7 @@ def login():
         user = User.query.get(session['user_id'])
         if user:
             if user.is_first_login: # 初回ログインの場合はパスワードリセット画面へ
+                flash('初回ログインです。新しいパスワードを設定してください。', 'info')
                 return redirect(url_for('reset_password'))
             elif user.is_admin: # 管理者の場合は管理者ダッシュボードへ
                 return redirect(url_for('admin_dashboard'))
@@ -256,6 +257,7 @@ def login():
             
             # 初回ログインの場合はパスワードリセット画面へリダイレクト
             if user.is_first_login:
+                flash('初回ログインです。新しいパスワードを設定してください。', 'info')
                 return redirect(url_for('reset_password'))
             # 管理者の場合は管理者ダッシュボードへリダイレクト
             elif user.is_admin:
@@ -323,18 +325,15 @@ def reset_password():
         return redirect(url_for('login'))
 
     user = User.query.get(session['user_id'])
-    # ユーザーが見つからない場合
-    if not user:
-        flash('ユーザーが見つかりません。', 'danger')
-        return redirect(url_for('login'))
-
-    # 初回ログインではない場合、パスワード再設定は不要なのでダッシュボードへリダイレクト
-    if not user.is_first_login:
-        flash('パスワードは既に設定済みです。', 'info')
-        if user.is_admin:
+    
+    # ユーザーが見つからない場合、または初回ログインフラグが立っていない場合はログイン画面へリダイレクト
+    if not user or not user.is_first_login:
+        # 管理者であればダッシュボードへ、そうでなければログインへ
+        if user and user.is_admin:
+            flash('既にパスワードは設定済みです。', 'info')
             return redirect(url_for('admin_dashboard'))
-        else:
-            return redirect(url_for('sales_dashboard'))
+        flash('パスワードは既に設定済みです。再度パスワードをリセットするには、「パスワードを忘れた場合」をご利用ください。', 'info')
+        return redirect(url_for('login'))
 
     # POSTリクエスト（パスワード再設定フォーム送信）の場合の処理
     if request.method == 'POST':

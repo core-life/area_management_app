@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, flash, session, Response
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
-from sqlalchemy import or_, func
+from sqlalchemy import or_, func, inspect # inspectをインポート
 from sqlalchemy.exc import IntegrityError # IntegrityErrorをインポート
 from openpyxl.styles import Border, Side, Alignment, Font
 from openpyxl.utils import get_column_letter
@@ -23,6 +23,8 @@ app_logger = logging.getLogger(__name__)
 # --- Flaskアプリケーションの初期設定 ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_super_secret_key_for_test')
+# RenderでPostgreSQLを使う場合は、環境変数DATABASE_URLを設定します。
+# SQLiteを使う場合は、下記の設定のままですが、データは永続化されません。
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///area_management.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
@@ -88,17 +90,20 @@ class AreaChangeLog(db.Model):
 def init_db_and_data():
     with app.app_context():
         app_logger.info("データベースの初期化とデータ投入を開始します。")
-        try:
-            # 古いデータベースファイルが存在する場合は削除（スキーマ変更のため）
-            if os.path.exists('area_management.db'):
-                os.remove('area_management.db')
-                app_logger.info("既存のデータベースファイル 'area_management.db' を削除しました。")
-            
-            db.create_all() # 全てのテーブルを作成
+        
+        # データベースの状態をチェック
+        inspector = inspect(db.engine)
+        # 少なくともuserテーブルが存在しない場合、または全てのテーブルが存在しない場合、テーブルを再作成
+        # これはRenderのEphemeral filesystem上のSQLiteでのみ機能し、データは永続化されません。
+        # PostgreSQLを使う場合は、初回デプロイ時にのみdb.create_all()を実行するように調整が必要です。
+        if not inspector.has_table("user"):
+            app_logger.warning("データベーススキーマが不完全、または存在しません。テーブルを再作成します。")
+            # 既存のテーブルをすべて削除してから作成（開発/デモ目的でのクリーンスタートに有効）
+            db.drop_all() 
+            db.create_all() 
             app_logger.info("データベーステーブルが作成されました。")
-        except Exception as e:
-            app_logger.error(f"データベーステーブルの作成中にエラーが発生しました: {e}")
-            # エラーが発生しても処理を続行するためにreturnしない
+        else:
+            app_logger.info("データベーステーブルは既に存在します。")
 
         # テスト管理者ユーザーの追加 (初回実行時のみ)
         admin_email = 'admin@clp-ytmm.com'
@@ -126,7 +131,6 @@ def init_db_and_data():
             app_logger.info(f"管理者ユーザー {admin_email} は既に存在します。")
 
         # 古いテスト営業職員ユーザーが存在する場合は削除する（モデル変更のため）
-        # この部分は、データベース削除によって不要になる可能性が高いですが、念のため残しておきます。
         old_test_sales_user = User.query.filter_by(name='test_user_sales').first()
         if old_test_sales_user:
             try:
@@ -189,6 +193,11 @@ def init_db_and_data():
             app_logger.warning(f"WARNING: {csv_file_path}が見つかりません。市区町村データが投入されません。")
         else:
             app_logger.info("市区町村データは既に投入されています。")
+
+# アプリケーションのロード時にデータベース初期化を確実に実行
+# GunicornがFlaskアプリをロードする際にこの部分が実行されます。
+with app.app_context():
+    init_db_and_data()
 
 # --- ルート（URLと関数のマッピング）の定義 ---
 
@@ -783,14 +792,14 @@ def download_excel(months):
         
         df_history = pd.DataFrame(history_data_summary)
         
-        if not df_history.empty:
+        if not df_history.empty: # データがある場合のみシートを追加
             for r_idx, row in enumerate(dataframe_to_rows(df_history, index=False, header=True), 1):
                 ws_history.append(row)
             
             for row in ws_history.iter_rows():
                 for cell in row:
                     cell.border = no_border
-        else:
+        else: # 履歴がない場合でもシートを作成し、メッセージを記載
             ws_history.append(['選択された期間のエリア変更履歴はありません。'])
             if ws_history['A1']:
                 ws_history['A1'].border = no_border
@@ -1017,5 +1026,6 @@ def index():
     return redirect(url_for('login'))
 
 if __name__ == '__main__':
-    init_db_and_data()
+    # ローカル開発環境でのみ、init_db_and_data()を明示的に呼び出す（自動実行はしない）
+    # Renderでは、app.app_context()ブロックで既に呼び出されます。
     app.run(debug=True)

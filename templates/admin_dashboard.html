@@ -10,56 +10,62 @@
         body {
             font-family: 'Inter', sans-serif;
         }
-        .scrollable-table-container {
-            max-height: 70vh; /* ビューポートの高さに基づいて調整 */
+        .table-container-scroll {
+            max-height: 70vh; /* Example height */
             overflow-y: auto;
-            -webkit-overflow-scrolling: touch; /* iOSでのスムーズなスクロール */
+            overflow-x: auto; /* Enable horizontal scrolling */
+            position: relative; /* Needed for sticky positioning context */
         }
-        /* カスタムスクロールバー */
-        .scrollable-table-container::-webkit-scrollbar {
-            width: 8px;
-        }
-        .scrollable-table-container::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 10px;
-        }
-        .scrollable-table-container::-webkit-scrollbar-thumb {
-            background: #888;
-            border-radius: 10px;
-        }
-        .scrollable-table-container::-webkit-scrollbar-thumb:hover {
-            background: #555;
-        }
-        th, td {
-            white-space: nowrap; /* 列の折り返しを防ぐ */
-            padding: 0.75rem 1rem; /* パディングを調整 */
-        }
-        th {
+        /* Sticky header (first row) */
+        .admin-table thead th {
             position: sticky;
             top: 0;
-            background: #f9fafb; /* ヘッダーの背景色を固定 */
-            z-index: 10;
+            background-color: #e2e8f0; /* bg-gray-200 */
+            z-index: 10; /* ヘッダーがスクロールしても固定されるように */
+        }
+
+        /* Sticky columns for the first four columns */
+        .sticky-col {
+            position: sticky;
+            background-color: white; /* スクロール時に背景が白になるように */
+            z-index: 11; /* 通常のセルより前面に表示 */
+            /* TailwindCSSのpadding-x-3 (12px) と border を考慮した幅の調整 */
+            padding-left: 0.75rem; /* px-3 */
+            padding-right: 0.75rem; /* px-3 */
+            box-sizing: border-box; /* paddingがwidthに含まれるように */
+        }
+
+        /* Specific sticky column positions - これらは実際のコンテンツ幅によって微調整が必要かもしれません */
+        .sticky-col.postal-code { left: 0; min-width: 90px; } /* 郵便番号 */
+        .sticky-col.local-gov-code { left: 90px; min-width: 140px; } /* 地方公共団体コード */
+        .sticky-col.prefecture { left: 230px; min-width: 120px; } /* 住所① (都道府県) */
+        .sticky-col.city-town-village { left: 350px; min-width: 150px; } /* 住所② (市区町村) */
+        
+        /* Ensure cells don't have borders for the requested style */
+        .admin-table th, .admin-table td {
+            border: none !important; /* Remove all borders */
+        }
+        .admin-table tbody tr:hover {
+            background-color: #f0f4f8; /* Light blue on hover for clarity */
         }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen flex flex-col items-center py-8">
     <div class="w-full max-w-6xl bg-white p-8 rounded-lg shadow-md">
         <div class="flex justify-between items-center mb-6">
-            <h2 class="text-3xl font-bold text-gray-800">ようこそ、{{ session.user_name }}さん！</h2>
+            <h2 class="text-3xl font-bold text-gray-800">事務職員ダッシュボード</h2>
             <div class="flex space-x-4">
-                <a href="{{ url_for('admin_users') }}" class="flex items-center bg-purple-600 hover:bg-purple-700 text-white font-semibold py-2 px-4 rounded-md shadow-sm transition duration-300 transform hover:scale-105">
+                <a href="{{ url_for('admin_users') }}" class="flex items-center bg-gray-500 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-md shadow-sm transition duration-300">
                     <i class="fas fa-users-cog mr-2"></i>ユーザー管理
                 </a>
-                <a href="{{ url_for('admin_upload_municipalities') }}" class="flex items-center bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-md shadow-sm transition duration-300 transform hover:scale-105">
-                    <i class="fas fa-file-upload mr-2"></i>市区町村データ更新
+                <a href="{{ url_for('admin_upload_municipalities') }}" class="flex items-center bg-gray-500 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-md shadow-sm transition duration-300">
+                    <i class="fas fa-upload mr-2"></i>市区町村データ更新
                 </a>
                 <a href="{{ url_for('logout') }}" class="flex items-center bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-md shadow-sm transition duration-300">
                     <i class="fas fa-sign-out-alt mr-2"></i>ログアウト
                 </a>
             </div>
         </div>
-
-        <h3 class="text-2xl font-semibold text-gray-700 mb-4">対応エリア一覧</h3>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
@@ -73,46 +79,90 @@
             {% endif %}
         {% endwith %}
 
-        <div class="mb-6 flex justify-end items-center space-x-4">
-            <label for="months-select" class="text-gray-700">過去</label>
-            <select id="months-select" class="p-2 border border-gray-300 rounded-md focus:ring focus:ring-blue-200 focus:border-blue-500">
-                <option value="1">1ヶ月</option>
-                <option value="3">3ヶ月</option>
-                <option value="6">6ヶ月</option>
-                <option value="12" selected>12ヶ月</option>
-            </select>
-            <label for="months-select" class="text-gray-700">分の履歴</label>
-            <a id="download-excel-link" href="{{ url_for('download_excel', months=12) }}" class="flex items-center bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 transform hover:scale-105">
-                <i class="fas fa-file-excel mr-2"></i>Excelダウンロード
-            </a>
+        <h3 class="text-2xl font-semibold text-gray-700 mb-4">対応エリア一覧</h3>
+
+        {# Search Form #}
+        <div class="bg-gray-50 p-6 rounded-lg shadow-inner mb-6">
+            <h4 class="text-xl font-semibold text-gray-700 mb-4">検索フィルター</h4>
+            <form method="GET" action="{{ url_for('admin_dashboard') }}" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+                <div>
+                    <label for="search_postal_code" class="block text-gray-700 text-sm font-semibold mb-2">郵便番号</label>
+                    <input type="text" id="search_postal_code" name="search_postal_code"
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring focus:ring-blue-200 focus:border-blue-500"
+                           value="{{ search_postal_code }}" placeholder="郵便番号で検索">
+                </div>
+                <div>
+                    <label for="search_local_gov_code" class="block text-gray-700 text-sm font-semibold mb-2">地方公共団体コード</label>
+                    <input type="text" id="search_local_gov_code" name="search_local_gov_code"
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring focus:ring-blue-200 focus:border-blue-500"
+                           value="{{ search_local_gov_code }}" placeholder="コードで検索">
+                </div>
+                <div>
+                    <label for="search_prefecture" class="block text-gray-700 text-sm font-semibold mb-2">住所① (都道府県)</label>
+                    <input type="text" id="search_prefecture" name="search_prefecture"
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring focus:ring-blue-200 focus:border-blue-500"
+                           value="{{ search_prefecture }}" placeholder="都道府県名で検索">
+                </div>
+                <div>
+                    <label for="search_city_town_village" class="block text-gray-700 text-sm font-semibold mb-2">住所② (市区町村)</label>
+                    <input type="text" id="search_city_town_village" name="search_city_town_village"
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring focus:ring-blue-200 focus:border-blue-500"
+                           value="{{ search_city_town_village }}" placeholder="市区町村名で検索">
+                </div>
+                <div class="col-span-full text-center mt-4">
+                    <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-md shadow-md transition duration-300 transform hover:scale-105">
+                        <i class="fas fa-search mr-2"></i>検索
+                    </button>
+                    <a href="{{ url_for('admin_dashboard') }}" class="inline-block ml-4 bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6 rounded-md shadow-md transition duration-300">
+                        <i class="fas fa-redo mr-2"></i>クリア
+                    </a>
+                </div>
+            </form>
         </div>
 
-        <div class="scrollable-table-container border border-gray-200 rounded-lg shadow-sm">
-            <table class="min-w-full divide-y divide-gray-200 bg-white">
-                <thead class="bg-gray-50">
+        {# Excel Download Buttons #}
+        <div class="mb-6 text-right">
+            <span class="text-gray-700 font-semibold mr-2">変更履歴の期間選択:</span>
+            <select id="months-select" class="p-2 border border-gray-300 rounded-md mr-4">
+                <option value="1">過去1ヶ月</option>
+                <option value="3">過去3ヶ月</option>
+                <option value="6">過去6ヶ月</option>
+                <option value="12" selected>過去12ヶ月</option>
+            </select>
+            <button onclick="downloadExcel()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 transform hover:scale-105">
+                <i class="fas fa-file-excel mr-2"></i>対応エリアをExcelダウンロード
+            </button>
+        </div>
+
+        <div class="table-container-scroll border border-gray-200 rounded-lg shadow-sm bg-white">
+            <table class="min-w-full divide-y divide-gray-200 admin-table">
+                <thead class="bg-gray-200">
                     <tr>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">郵便番号</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">地方公共団体コード</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">住所① (都道府県)</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">住所② (市区町村)</th>
+                        <th class="px-3 py-3 text-xs font-semibold text-gray-800 uppercase tracking-wider sticky-col postal-code">郵便番号</th>
+                        <th class="px-3 py-3 text-xs font-semibold text-gray-800 uppercase tracking-wider sticky-col local-gov-code">地方公共団体コード</th>
+                        <th class="px-3 py-3 text-xs font-semibold text-gray-800 uppercase tracking-wider sticky-col prefecture">住所①</th>
+                        <th class="px-3 py-3 text-xs font-semibold text-gray-800 uppercase tracking-wider sticky-col city-town-village">住所②</th>
+                        {# 営業職員の所属と氏名を一つの<th>で表示 #}
                         {% for user in all_users %}
-                            <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">{{ user.name }}</th>
+                            <th class="px-3 py-3 text-xs font-semibold text-gray-800 uppercase tracking-wider text-center">
+                                {{ user.affiliation if user.affiliation else '所属なし' }}<br>{{ user.name }}
+                            </th>
                         {% endfor %}
                     </tr>
                 </thead>
-                <tbody class="divide-y divide-gray-200">
-                    {% for municipality in all_municipalities %}
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for muni in all_municipalities %}
                         <tr>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ municipality.postal_code if municipality.postal_code else '-' }}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ municipality.local_gov_code }}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ municipality.prefecture }}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ municipality.city_town_village }}</td>
+                            <td class="px-3 py-3 text-sm text-gray-900 sticky-col postal-code">{{ muni.postal_code if muni.postal_code else '-' }}</td>
+                            <td class="px-3 py-3 text-sm text-gray-900 sticky-col local-gov-code">{{ muni.local_gov_code }}</td>
+                            <td class="px-3 py-3 text-sm text-gray-900 sticky-col prefecture">{{ muni.prefecture }}</td>
+                            <td class="px-3 py-3 text-sm text-gray-900 sticky-col city-town-village">{{ muni.city_town_village }}</td>
                             {% for user in all_users %}
-                                <td class="px-6 py-4 whitespace-nowrap text-center text-sm">
-                                    {% if user.id in municipality_user_map[municipality.id] %}
-                                        <i class="fas fa-check-circle text-green-500"></i>
+                                <td class="px-3 py-3 text-sm text-gray-900 text-center">
+                                    {% if user.id in municipality_user_map.get(muni.id, []) %}
+                                        〇
                                     {% else %}
-                                        <i class="fas fa-times-circle text-gray-300"></i>
+                                        - {# Display hyphen for unassigned areas #}
                                     {% endif %}
                                 </td>
                             {% endfor %}
@@ -120,22 +170,17 @@
                     {% endfor %}
                 </tbody>
             </table>
+            {% if not all_municipalities %}
+                <p class="p-4 text-center text-gray-600">表示する市区町村データがありません。</p>
+            {% endif %}
         </div>
     </div>
 
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const monthsSelect = document.getElementById('months-select');
-            const downloadLink = document.getElementById('download-excel-link');
-
-            monthsSelect.addEventListener('change', function() {
-                const selectedMonths = this.value;
-                // ここで url_for を直接使用せず、JavaScriptでURLを構築します。
-                // Flaskのurl_forはJinja2テンプレートエンジンでサーバーサイドで実行されるため、
-                // JavaScriptで動的に変更する際には使用できません。
-                downloadLink.href = `/download_excel?months=${selectedMonths}`;
-            });
-        });
+        function downloadExcel() {
+            const months = document.getElementById('months-select').value;
+            window.location.href = `{{ url_for('download_excel') }}?months=${months}`;
+        }
     </script>
 </body>
 </html>

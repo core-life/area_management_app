@@ -8,7 +8,9 @@ from flask import Flask, render_template, request, redirect, url_for, flash, ses
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import or_, func # funcをインポート
-from openpyxl.styles import Border, Side # BorderとSideをインポート
+from openpyxl.styles import Border, Side, Alignment, Font # Border, Side, Alignment, Fontをインポート
+from openpyxl.utils import get_column_letter # get_column_letterをインポート
+from openpyxl import Workbook # Workbookをインポート
 
 # --- Flaskアプリケーションの初期設定 ---
 app = Flask(__name__)
@@ -508,8 +510,34 @@ def admin_dashboard():
         flash('管理者権限が必要です。', 'danger')
         return redirect(url_for('login'))
     
-    # 全ての市区町村データを取得 (地方公共団体コード順)
-    all_municipalities = Municipality.query.order_by(
+    # 検索パラメータの取得
+    search_postal_code = request.args.get('search_postal_code', '').strip()
+    search_local_gov_code = request.args.get('search_local_gov_code', '').strip()
+    search_prefecture = request.args.get('search_prefecture', '').strip()
+    search_city_town_village = request.args.get('search_city_town_village', '').strip()
+
+    # 市区町村データのクエリを構築
+    municipalities_query = Municipality.query
+
+    if search_postal_code:
+        municipalities_query = municipalities_query.filter(
+            Municipality.postal_code.ilike(f'%{search_postal_code}%')
+        )
+    if search_local_gov_code:
+        municipalities_query = municipalities_query.filter(
+            Municipality.local_gov_code.ilike(f'%{search_local_gov_code}%')
+        )
+    if search_prefecture:
+        municipalities_query = municipalities_query.filter(
+            Municipality.prefecture.ilike(f'%{search_prefecture}%')
+        )
+    if search_city_town_village:
+        municipalities_query = municipalities_query.filter(
+            Municipality.city_town_village.ilike(f'%{search_city_town_village}%')
+        )
+
+    # 全ての市区町村データを取得 (地方公共団体コード順でソート)
+    all_municipalities = municipalities_query.order_by(
         Municipality.local_gov_code
     ).all()
 
@@ -532,7 +560,11 @@ def admin_dashboard():
         'admin_dashboard.html',
         all_municipalities=all_municipalities,
         all_users=all_users,
-        municipality_user_map=municipality_user_map
+        municipality_user_map=municipality_user_map,
+        search_postal_code=search_postal_code, # 検索値をテンプレートに渡す
+        search_local_gov_code=search_local_gov_code,
+        search_prefecture=search_prefecture,
+        search_city_town_village=search_city_town_village
     )
 
 # 事務職員によるユーザー管理ページ（一覧表示）
@@ -623,153 +655,153 @@ def download_excel(months): # 関数シグネチャにmonthsを追加
         return redirect(url_for('login'))
     
     # 選択された月数を取得 (デフォルトは12ヶ月)
-    # デコレータでmonthsを受け取るようになったため、request.args.getは不要
     months_to_export = months
     # 1ヶ月から12ヶ月の範囲に制限
     if not (1 <= months_to_export <= 12):
         months_to_export = 12 
 
     # ダウンロードボタンを押した日が属する月を1か月目と計算
-    # 現在時刻の年と月から、(months_to_export - 1)ヶ月前の月の1日を計算
-    current_date = datetime.utcnow() # 現在時刻 (UTC)
+    current_date = datetime.utcnow()
     
-    # 計算を開始月を見つけるための初期設定
     start_year = current_date.year
     start_month = current_date.month - (months_to_export - 1)
-    
-    # 月が1以下の場合は年を減らし、月を調整
     while start_month <= 0:
         start_month += 12
         start_year -= 1
-
-    # フィルタリングの開始日 (その月の1日0時0分0秒)
     start_date_of_history = datetime(start_year, start_month, 1, 0, 0, 0, 0)
 
-
-    # 全ての市区町村データを取得 (Excel出力も地方公共団体コード順に)
     all_municipalities = Municipality.query.order_by(
         Municipality.local_gov_code
     ).all()
 
-    # 営業職員のみを取得 (名前順)
     all_users = User.query.filter_by(is_admin=False).order_by(User.name).all()
 
-    # Excelファイルとしてメモリ上に保存するためのBytesIOオブジェクト
     output = io.BytesIO()
-    # PandasのExcelWriterを使用して複数のシートを書き込む
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # --- メインシート (対応エリア一覧) ---
-        header_main = ['郵便番号', '地方公共団体コード', '住所①', '住所②']
-        user_names_main = [user.name for user in all_users] # Excelヘッダーにユーザー名を使用
-        header_main.extend(user_names_main)
+    
+    # Create a new workbook directly with openpyxl
+    wb = Workbook()
+    
+    # --- メインシート (対応エリア一覧) ---
+    ws_main = wb.active
+    ws_main.title = '対応エリア一覧'
 
-        data_rows_main = []
-        for municipality in all_municipalities:
-            row_main = [
-                municipality.postal_code if municipality.postal_code else '', # 郵便番号（ない場合は空文字列）
-                municipality.local_gov_code,
-                municipality.prefecture,
-                municipality.city_town_village
-            ]
-            for user in all_users:
-                # ユーザーがその市区町村を担当しているかチェック
-                is_assigned = db.session.query(UserArea).filter_by(
-                    user_id=user.id, municipality_id=municipality.id
-                ).first() is not None
-                row_main.append('〇' if is_assigned else '') # 担当していれば「〇」、そうでなければ空文字列
-            data_rows_main.append(row_main)
-        
-        # DataFrameを作成し、Excelシートに書き込み
-        df_main = pd.DataFrame(data_rows_main, columns=header_main)
-        df_main.to_excel(writer, index=False, sheet_name='対応エリア一覧')
+    # Define the no border style
+    no_border = Border(left=Side(style=None), right=Side(style=None), top=Side(style=None), bottom=Side(style=None))
+    
+    # Define bold and centered style for headers
+    header_font = Font(bold=True)
+    header_alignment = Alignment(horizontal='center', vertical='center')
 
-        # ExcelWriterのwriterオブジェクトからWorkbookを取得
-        workbook = writer.book
+    # Header Row 1: 郵便番号, 地方公共団体コード, 住所①, 住所②, そして所属データ
+    # 各ユーザーの所属が対応する氏名の上にくるように調整
+    row1_cells = ['郵便番号', '地方公共団体コード', '住所①', '住所②']
+    for user in all_users:
+        row1_cells.append(user.affiliation if user.affiliation else '')
+    ws_main.append(row1_cells)
+
+    # Header Row 2: ユーザー名データ
+    row2_cells = ['', '', '', ''] # Keep first 4 columns empty in this row for static headers
+    for user in all_users:
+        row2_cells.append(user.name)
+    ws_main.append(row2_cells)
+
+    # Apply styling to header rows (Row 1 and Row 2)
+    for row_idx in range(1, 3): # Rows 1 and 2
+        for col_idx in range(1, len(row1_cells) + 1): # Iterate over all columns used
+            cell = ws_main.cell(row=row_idx, column=col_idx)
+            cell.font = header_font
+            cell.alignment = header_alignment
+            cell.border = no_border # Ensure no border for headers too
+
+
+    # Merge cells for static headers that span 2 rows (A1:A2, B1:B2, C1:C2, D1:D2)
+    ws_main.merge_cells('A1:A2')
+    ws_main.merge_cells('B1:B2')
+    ws_main.merge_cells('C1:C2')
+    ws_main.merge_cells('D1:D2')
+
+    # Data Rows (starting from Row 3)
+    for municipality in all_municipalities:
+        row_data = [
+            municipality.postal_code if municipality.postal_code else '',
+            municipality.local_gov_code,
+            municipality.prefecture,
+            municipality.city_town_village
+        ]
+        for user in all_users:
+            is_assigned = db.session.query(UserArea).filter_by(
+                user_id=user.id, municipality_id=municipality.id
+            ).first() is not None
+            row_data.append('〇' if is_assigned else '')
+        ws_main.append(row_data)
+
+    # Set column width for '住所②' (D column)
+    ws_main.column_dimensions['D'].width = 20.75
+
+    # Remove borders from all data cells in the main sheet (already handled for headers)
+    # Iterate from row 3 onwards for data cells
+    for row_idx in range(3, ws_main.max_row + 1):
+        for col_idx in range(1, ws_main.max_column + 1):
+            cell = ws_main.cell(row=row_idx, column=col_idx)
+            cell.border = no_border
+
+    # --- 変更履歴シート (エリア変更履歴_月次) ---
+    ws_history = wb.create_sheet('エリア変更履歴_月次')
+    
+    history_logs = db.session.query(AreaChangeLog, Municipality, User).\
+        join(Municipality, AreaChangeLog.municipality_id == Municipality.id).\
+        join(User, AreaChangeLog.user_id == User.id).\
+        filter(AreaChangeLog.change_date >= start_date_of_history).\
+        order_by(AreaChangeLog.change_date.asc()).all() 
+
+    monthly_changes = {} 
+    for log, muni, user in history_logs:
+        change_month = log.change_date.strftime('%Y年%m月')
+        user_name = user.name
+        area_name = f"{muni.prefecture}{muni.city_town_village}"
+        change_type = log.change_type
+
+        if change_month not in monthly_changes:
+            monthly_changes[change_month] = {}
+        if user_name not in monthly_changes[change_month]:
+            monthly_changes[change_month][user_name] = {'assigned': [], 'unassigned': []}
         
-        # --- 「対応エリア一覧」シートの書式設定 ---
-        if '対応エリア一覧' in workbook.sheetnames:
-            sheet_main = workbook['対応エリア一覧']
+        monthly_changes[change_month][user_name][change_type].append(area_name)
+    
+    history_data_summary = []
+    for month in sorted(monthly_changes.keys()):
+        for user_name in sorted(monthly_changes[month].keys()):
+            assigned_areas = "、".join(monthly_changes[month][user_name]['assigned'])
+            unassigned_areas = "、".join(monthly_changes[month][user_name]['unassigned'])
             
-            # 「住所②」列の幅を設定 (D列)
-            sheet_main.column_dimensions['D'].width = 20.75
-
-            # すべてのセルから罫線を削除
-            no_border = Border(left=Side(style=None), 
-                               right=Side(style=None), 
-                               top=Side(style=None), 
-                               bottom=Side(style=None))
-            for row in sheet_main.iter_rows():
-                for cell in row:
-                    cell.border = no_border
-
-        # --- 変更履歴シート (フィルタリング適用) ---
-        history_logs = db.session.query(AreaChangeLog, Municipality, User).\
-            join(Municipality, AreaChangeLog.municipality_id == Municipality.id).\
-            join(User, AreaChangeLog.user_id == User.id).\
-            filter(AreaChangeLog.change_date >= start_date_of_history).\
-            order_by(AreaChangeLog.change_date.asc()).all() 
-
-        # 月ごとの変更を辞書に集計
-        # 例: {'YYYY年MM月': {'ユーザー名': {'assigned': [エリア名1, ...], 'unassigned': [エリア名2, ...]}, ...}}
-        monthly_changes = {} 
-        for log, muni, user in history_logs:
-            change_month = log.change_date.strftime('%Y年%m月') # 変更があった年月
-            user_name = user.name # 変更を行ったユーザーの名前
-            area_name = f"{muni.prefecture}{muni.city_town_village}" # エリア名
-            change_type = log.change_type # 'assigned' or 'unassigned'
-
-            # 辞書構造を初期化
-            if change_month not in monthly_changes:
-                monthly_changes[change_month] = {}
-            if user_name not in monthly_changes[change_month]:
-                monthly_changes[change_month][user_name] = {'assigned': [], 'unassigned': []}
-            
-            # 変更内容をリストに追加
-            monthly_changes[change_month][user_name][change_type].append(area_name)
+            history_data_summary.append({
+                '対象月': month,
+                '営業職員名': user_name,
+                '対応可能エリア追加': assigned_areas,
+                '対応可能エリア削除': unassigned_areas
+            })
+    
+    df_history = pd.DataFrame(history_data_summary)
+    
+    if not df_history.empty:
+        # Write DataFrame to the history sheet
+        for r_idx, row in enumerate(dataframe_to_rows(df_history, index=False, header=True), 1):
+            ws_history.append(row)
         
-        # 集計データをDataFrameに変換するためのリスト
-        history_data_summary = []
-        # 月、ユーザー名の順でソートしてデータを整形
-        for month in sorted(monthly_changes.keys()):
-            for user_name in sorted(monthly_changes[month].keys()):
-                assigned_areas = "、".join(monthly_changes[month][user_name]['assigned']) # 追加されたエリアをカンマ区切りで結合
-                unassigned_areas = "、".join(monthly_changes[month][user_name]['unassigned']) # 削除されたエリアをカンマ区切りで結合
-                
-                history_data_summary.append({
-                    '対象月': month,
-                    '営業職員名': user_name,
-                    '対応可能エリア追加': assigned_areas,
-                    '対応可能エリア削除': unassigned_areas
-                })
-        
-        # 履歴のDataFrameを作成
-        df_history = pd.DataFrame(history_data_summary)
-        
-        # データがある場合のみシートを追加。ない場合はメッセージを記載したシートを作成
-        if not df_history.empty:
-            df_history.to_excel(writer, index=False, sheet_name='エリア変更履歴_月次')
-            # --- 「エリア変更履歴_月次」シートの書式設定 ---
-            sheet_history = workbook['エリア変更履歴_月次']
-            # すべてのセルから罫線を削除
-            for row in sheet_history.iter_rows():
-                for cell in row:
-                    cell.border = no_border # 上で定義したno_borderを使用
-        else:
-            empty_df = pd.DataFrame({'メッセージ': ['選択された期間のエリア変更履歴はありません。']})
-            empty_df.to_excel(writer, index=False, sheet_name='エリア変更履歴_月次')
-            sheet_history = workbook['エリア変更履歴_月次'] # empty_dfでもシートは作成されるので取得
-            for row in sheet_history.iter_rows():
-                for cell in row:
-                    cell.border = no_border
+        # Apply no border to history sheet
+        for row in ws_history.iter_rows():
+            for cell in row:
+                cell.border = no_border
+    else:
+        ws_history.append(['選択された期間のエリア変更履歴はありません。'])
+        if ws_history['A1']:
+            ws_history['A1'].border = no_border
 
-
-    # BytesIOオブジェクトの先頭にシーク
+    wb.save(output)
     output.seek(0) 
 
-    # ファイル名に現在の日時（年、月、日、時、分、秒）を含める
     filename = f"area_list_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx"
 
-    # 生成したExcelファイルをHTTPレスポンスとして返す
     return Response(
         output.getvalue(),
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

@@ -11,6 +11,7 @@ from sqlalchemy import or_, func # funcをインポート
 from openpyxl.styles import Border, Side, Alignment, Font # Border, Side, Alignment, Fontをインポート
 from openpyxl.utils import get_column_letter # get_column_letterをインポート
 from openpyxl import Workbook # Workbookをインポート
+from openpyxl.utils.dataframe import dataframe_to_rows # dataframe_to_rowsをインポート
 
 # --- Flaskアプリケーションの初期設定 ---
 app = Flask(__name__)
@@ -97,8 +98,6 @@ def init_db_and_data():
             print(f"管理者ユーザー {admin_email} を追加しました。")
 
         # 古いテスト営業職員ユーザーが存在する場合は削除する（モデル変更のため）
-        # 新しい営業職員は新規登録機能で作成される
-        # 注意：これは開発環境でのマイグレーションを簡素化するためのものです。本番では適切なデータ移行戦略を検討してください。
         old_test_sales_user = User.query.filter_by(name='test_user_sales').first()
         if old_test_sales_user:
             # 関連するUserAreaとAreaChangeLogも削除
@@ -109,109 +108,36 @@ def init_db_and_data():
         db.session.commit() # 変更をコミット
 
         # 市区町村データの読み込みと投入 (初回実行時のみ)
-        # municipalities.csv ファイルからの読み込みではなく、コード内のデータを使用
-        MUNICIPALITIES_CSV_DATA = """
-郵便番号,地方公共団体コード,都道府県,市区町村
-0600000,01101,北海道,札幌市中央区
-0010000,01102,北海道,札幌市北区
-0650000,01103,北海道,札幌市東区
-0060800,01104,北海道,札幌市手稲区
-0620000,01105,北海道,札幌市豊平区
-0470000,01202,北海道,函館市
-0788200,01210,北海道,旭川市
-0850000,01206,北海道,釧路市
-0800000,01207,北海道,帯広市
-9800000,04101,宮城県,仙台市青葉区
-9830000,04102,宮城県,仙台市宮城野区
-9840000,04103,宮城県,仙台市若林区
-9820000,04104,宮城県,仙台市太白区
-9811200,04202,宮城県,名取市
-9850000,04203,宮城県,塩竈市
-1000000,13101,東京都,千代田区
-1040000,13102,東京都,中央区
-1060000,13103,東京都,港区
-1600000,13104,東京都,新宿区
-1120000,13105,東京都,文京区
-1530000,13106,東京都,目黒区
-1400000,13107,東京都,品川区
-1500000,13113,東京都,渋谷区
-1640000,13114,東京都,中野区
-1660000,13115,東京都,杉並区
-1700000,13116,東京都,豊島区
-1140000,13117,東京都,北区
-1160000,13118,東京都,荒川区
-1740000,13119,東京都,板橋区
-1200000,13120,東京都,足立区
-1240000,13121,東京都,葛飾区
-1300000,13122,東京都,墨田区
-1350000,13123,東京都,江東区
-1440000,13111,東京都,大田区
-1540000,13112,東京都,世田谷区
-1800000,13203,東京都,武蔵野市
-1900000,13204,東京都,三鷹市
-1940000,13206,東京都,町田市
-2200000,14101,神奈川県,横浜市鶴見区
-2300000,14102,神奈川県,横浜市神奈川区
-2310000,14103,神奈川県,横浜市西区
-2320000,14104,神奈川県,横浜市中区
-2350000,14105,神奈川県,横浜市南区
-2360000,14106,神奈川県,横浜市保土ケ谷区
-2380000,14107,神奈川県,横浜市磯子区
-2400000,14108,神奈川県,横浜市金沢区
-2440000,14109,神奈川県,横浜市港北区
-2450000,14110,神奈川県,横浜市戸塚区
-2500000,14201,神奈川県,川崎市川崎区
-2520000,14203,神奈川県,川崎市中原区
-2540000,14204,神奈川県,川崎市高津区
-2600000,14205,神奈川県,川崎市多摩区
-2620000,14206,神奈川県,川崎市宮前区
-4600000,23101,愛知県,名古屋市千種区
-4610000,23102,愛知県,名古屋市東区
-4530000,23103,愛知県,名古屋市北区
-4540000,23104,愛知県,名古屋市西区
-4560000,23105,愛知県,名古屋市中村区
-4600000,23106,愛知県,名古屋市中区
-4620000,23107,愛知県,名古屋市昭和区
-4630000,23108,愛知県,名古屋市瑞穂区
-4640000,23109,愛知県,名古屋市熱田区
-4650000,23110,愛知県,名古屋市中川区
-5300000,27101,大阪府,大阪市北区
-5400000,27102,大阪府,大阪市都島区
-5450000,27103,大阪府,大阪市福島区
-5500000,27104,大阪府,大阪市此花区
-5530000,27105,大阪府,大阪市中央区
-5560000,27106,大阪府,大阪市西区
-5570000,27107,大阪府,大阪市港区
-5580000,27108,大阪府,大阪市大正区
-5590000,27109,大阪府,大阪市天王寺区
-5600000,27110,大阪府,大阪市浪速区
-8100000,40101,福岡県,福岡市博多区
-8120000,40130,福岡県,福岡市中央区
-8140000,40131,福岡県,福岡市南区
-8160000,40132,福岡県,福岡市西区
-8190000,40133,福岡県,福岡市東区
-8000000,40134,福岡県,福岡市城南区
-8020000,40135,福岡県,福岡市早良区
-"""
+        # municipalities.csv ファイルからの読み込みに変更
+        csv_file_path = 'municipalities.csv'
         
-        # Municipalityテーブルが空の場合にのみ実行（本番環境では注意が必要）
-        if not Municipality.query.first(): 
-            print("CSVデータをコードからデータベースに投入します...")
+        if not Municipality.query.first() and os.path.exists(csv_file_path):
+            print(f"{csv_file_path}から市区町村データを投入します...")
             df = None
+            # local_gov_codeとpostal_codeを明示的に文字列として読み込む
+            read_csv_params = {'dtype': {'地方公共団体コード': str, '郵便番号': str}}
             try:
-                # StringIOを使って文字列データをファイルのように読み込む
-                # PostgreSQLではdtypeを指定しないか、カラム名を適切にマップする必要がある
-                df = pd.read_csv(io.StringIO(MUNICIPALITIES_CSV_DATA), dtype={'地方公共団体コード': str, '郵便番号': str}) # 日本語列名に対応
-            except Exception as e:
-                print(f"データの読み込みエラーが発生しました: {e}")
-                return 
+                # まずはutf-8で試行
+                df = pd.read_csv(csv_file_path, encoding='utf-8', **read_csv_params)
+            except UnicodeDecodeError:
+                print("utf-8での読み込みに失敗しました。cp932 (Shift-JIS) で再試行します。")
+                try:
+                    # utf-8で失敗した場合、cp932で試行
+                    df = pd.read_csv(csv_file_path, encoding='cp932', **read_csv_params)
+                except Exception as e: # より広範なエラーをキャッチ
+                    print(f"CSVファイルの読み込みエラー: cp932 (Shift-JIS) でも読み込みに失敗しました。")
+                    print(f"ファイルが壊れているか、別のエンコーディングの可能性があります。エラー: {e}")
+                    return # 処理を中断
+            except Exception as e: # その他のファイル読み込みエラー
+                print(f"CSVファイルの読み込み中に予期せぬエラーが発生しました: {e}")
+                return
 
-            if df is not None:
-                # DataFrameの列が期待通りか確認 (念のため、日本語列名でチェック)
+            if df is not None: # dfが正常に読み込まれた場合のみ処理を続行
+                # DataFrameの列が期待通りか確認 (念のため)
                 expected_columns = ['郵便番号', '地方公共団体コード', '都道府県', '市区町村']
                 if not all(col in df.columns for col in expected_columns):
                     print(f"CSVファイルの列が期待と異なります。期待される列: {expected_columns}, 実際の列: {df.columns.tolist()}")
-                    return
+                    return # 処理を中断
 
                 for index, row in df.iterrows():
                     municipality = Municipality(
@@ -223,6 +149,10 @@ def init_db_and_data():
                     db.session.add(municipality)
                 db.session.commit()
                 print("市区町村データの投入が完了しました。")
+            else: # dfがNoneの場合 (読み込みエラーでreturnしなかったがdfがNoneの場合)
+                print("市区町村データの読み込みに失敗したため、データベースへの投入をスキップします。")
+        elif not os.path.exists(csv_file_path):
+            print(f"WARNING: {csv_file_path}が見つかりません。市区町村データが投入されません。")
         else:
             print("市区町村データは既に投入されています。")
 
@@ -545,14 +475,18 @@ def admin_dashboard():
     all_users = User.query.filter_by(is_admin=False).order_by(User.name).all()
 
     # 各市区町村に対応するユーザーのIDをマッピングするための辞書
-    municipality_user_map = {}
-    for muni in all_municipalities:
-        municipality_user_map[muni.id] = set() 
+    # 表示対象の市区町村IDのみをキーとして初期化する
+    municipality_user_map = {muni.id: set() for muni in all_municipalities}
 
-    # 全てのUserAreaを取得し、マッピング辞書を構築
-    all_user_areas = UserArea.query.all()
-    for user_area in all_user_areas:
-        # 営業職員にのみ関連するエリアをマッピング
+    # 表示対象の市区町村に関連するUserAreaレコードのみを取得
+    municipality_ids_to_display = [m.id for m in all_municipalities]
+    user_areas_for_displayed_municipalities = UserArea.query.filter(
+        UserArea.municipality_id.in_(municipality_ids_to_display)
+    ).all()
+
+    for user_area in user_areas_for_displayed_municipalities:
+        # UserAreaのユーザーIDが営業職員であり、かつ対応する市区町村IDがマップに存在する場合のみ追加
+        # municipality_user_map[user_area.municipality_id] は既に存在することが保証される
         if any(u.id == user_area.user_id for u in all_users):
             municipality_user_map[user_area.municipality_id].add(user_area.user_id)
 
@@ -695,14 +629,16 @@ def download_excel(months): # 関数シグネチャにmonthsを追加
     # Header Row 1: 郵便番号, 地方公共団体コード, 住所①, 住所②, そして所属データ
     # 各ユーザーの所属が対応する氏名の上にくるように調整
     row1_cells = ['郵便番号', '地方公共団体コード', '住所①', '住所②']
-    for user in all_users:
-        row1_cells.append(user.affiliation if user.affiliation else '')
+    # 所属ヘッダーを追加
+    user_affiliations = [user.affiliation if user.affiliation else '' for user in all_users]
+    row1_cells.extend(user_affiliations)
     ws_main.append(row1_cells)
 
     # Header Row 2: ユーザー名データ
     row2_cells = ['', '', '', ''] # Keep first 4 columns empty in this row for static headers
-    for user in all_users:
-        row2_cells.append(user.name)
+    # 氏名ヘッダーを追加
+    user_names = [user.name for user in all_users]
+    row2_cells.extend(user_names)
     ws_main.append(row2_cells)
 
     # Apply styling to header rows (Row 1 and Row 2)
@@ -780,7 +716,7 @@ def download_excel(months): # 関数シグネチャにmonthsを追加
                 '対応可能エリア追加': assigned_areas,
                 '対応可能エリア削除': unassigned_areas
             })
-    
+        
     df_history = pd.DataFrame(history_data_summary)
     
     if not df_history.empty:

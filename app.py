@@ -7,17 +7,15 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, flash, session, Response
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
-from sqlalchemy import or_, func # funcをインポート
-from openpyxl.styles import Border, Side, Alignment, Font # Border, Side, Alignment, Fontをインポート
-from openpyxl.utils import get_column_letter # get_column_letterをインポート
-from openpyxl import Workbook # Workbookをインポート
-from openpyxl.utils.dataframe import dataframe_to_rows # dataframe_to_rowsをインポート
+from sqlalchemy import or_, func
+from openpyxl.styles import Border, Side, Alignment, Font
+from openpyxl.utils import get_column_letter
+from openpyxl import Workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
 
 # --- Flaskアプリケーションの初期設定 ---
 app = Flask(__name__)
-# SECRET_KEYは環境変数から取得、Renderで設定します
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_super_secret_key_for_test')
-# DATABASE_URLも環境変数から取得、Renderで設定します
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///area_management.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
@@ -27,10 +25,11 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False) # ユーザー名はメールアドレスに固定
     name = db.Column(db.String(80), nullable=False) # 表示用の名前 (スペース除去済み)
-    password_hash = db.Column(db.String(256), nullable=False) # パスワードをハッシュ化して保存 (長さを128から256に増やしました)
+    password_hash = db.Column(db.String(256), nullable=False) # パスワードをハッシュ化して保存
     affiliation = db.Column(db.String(100), nullable=True) # 所属
     is_admin = db.Column(db.Boolean, default=False) # 事務職員判定用
     is_first_login = db.Column(db.Boolean, default=True) # 初回ログインフラグ
+    last_area_update = db.Column(db.DateTime, nullable=True) # 最終エリア更新日時を追加
 
     # パスワードハッシュ化のメソッド
     def set_password(self, password):
@@ -81,6 +80,11 @@ class AreaChangeLog(db.Model):
 # --- データベースの初期化とデータ投入関数 ---
 def init_db_and_data():
     with app.app_context():
+        # Userモデルにlast_area_updateカラムが追加されたため、
+        # 既存のDBファイルを使用している場合は、DBを一度削除してから再作成するか、
+        # SQLAlchemy-migrateなどのツールでマイグレーションを行う必要があります。
+        # 開発中であれば、area_management.dbファイルを削除して、再度init_db_and_data()を実行するのが最も簡単です。
+        # 例: os.remove('area_management.db') # データベースファイルを削除する場合
         db.create_all() # 全てのテーブルを作成
 
         # テスト管理者ユーザーの追加 (初回実行時のみ)
@@ -91,7 +95,8 @@ def init_db_and_data():
                 name='管理者',
                 affiliation='本社',
                 is_admin=True,
-                is_first_login=False # 管理者は初回ログインではないとする
+                is_first_login=False, # 管理者は初回ログインではないとする
+                last_area_update=datetime.utcnow() # 初期管理者も最終更新日時を設定
             )
             admin_user.set_password('admin_password') # 管理者パスワードを設定
             db.session.add(admin_user)
@@ -226,7 +231,8 @@ def register():
             name=name,
             affiliation=affiliation,
             is_admin=False, # 新規登録されるのは営業職員とする
-            is_first_login=True # 初回ログインフラグを立てる
+            is_first_login=True, # 初回ログインフラグを立てる
+            last_area_update=None # 新規ユーザーの最終更新日時は最初はNone
         )
         # 仮パスワードをハッシュ化して設定
         new_user.set_password(temporary_password) 
@@ -252,8 +258,6 @@ def reset_password():
     user = User.query.get(session['user_id'])
     
     # ユーザーが見つからない場合、または初回ログインフラグが立っていない場合はログイン画面へリダイレクト
-    # user が None であればユーザーが見つからない。
-    # user が存在しても is_first_login が False であれば、初回ログインではない。
     if not user:
         flash('ユーザー情報が見つかりませんでした。再度ログインしてください。', 'danger')
         return redirect(url_for('login'))
@@ -338,7 +342,17 @@ def sales_dashboard():
         return redirect(url_for('login'))
     
     current_user_id = session['user_id']
-    
+    current_user = User.query.get(current_user_id) # 現在のユーザー情報を取得
+
+    # 更新制限メッセージのチェック
+    update_message = None
+    if current_user and current_user.last_area_update:
+        current_utc_month = datetime.utcnow().month
+        last_update_month = current_user.last_area_update.month
+        if current_utc_month == last_update_month:
+            update_message = f"今月は既にエリアを更新しています。（最終更新: {current_user.last_area_update.strftime('%Y年%m月%d日 %H:%M')}）"
+            flash(update_message, 'info') # フラッシュメッセージとして表示
+
     # 全ての市区町村データを取得 (地方公共団体コード順)
     municipalities = Municipality.query.order_by(Municipality.local_gov_code).all()
     # ユーザーが現在選択している市区町村のIDを取得
@@ -358,7 +372,8 @@ def sales_dashboard():
         'sales_dashboard.html',
         municipalities=municipalities,
         user_selected_municipality_ids=user_selected_municipality_ids,
-        prefectures=prefectures
+        prefectures=prefectures,
+        update_message=update_message # テンプレートに更新制限メッセージを渡す
     )
 
 # 営業職員の対応エリア保存機能
@@ -370,6 +385,19 @@ def save_sales_area():
         return redirect(url_for('login'))
 
     current_user_id = session['user_id']
+    current_user = User.query.get(current_user_id)
+
+    # ★エリア更新頻度制限のロジック★
+    if current_user.last_area_update:
+        current_utc_date = datetime.utcnow()
+        # 最終更新が今月かどうかをチェック
+        if current_user.last_area_update.year == current_utc_date.year and \
+           current_user.last_area_update.month == current_utc_date.month:
+            flash('今月は既にエリアを更新しています。エリア更新は月1回までです。', 'danger')
+            return redirect(url_for('sales_dashboard'))
+    # ★更新頻度制限ロジックここまで★
+
+
     selected_municipality_ids_str = request.form.getlist('selected_areas') # 選択されたエリアIDのリスト
     selected_municipality_ids = {int(mid) for mid in selected_municipality_ids_str} # セットに変換
 
@@ -396,6 +424,10 @@ def save_sales_area():
         log_entry = AreaChangeLog(user_id=current_user_id, municipality_id=muni_id, change_type='assigned')
         db.session.add(log_entry)
 
+    # 変更があった場合のみlast_area_updateを更新
+    if areas_to_delete or areas_to_add:
+        current_user.last_area_update = datetime.utcnow()
+        
     db.session.commit() # データベースに変更をコミット
     flash('対応エリアが更新されました！', 'success') # 成功メッセージ
     return redirect(url_for('sales_dashboard')) # ダッシュボードへリダイレクト
@@ -441,24 +473,14 @@ def admin_dashboard():
         return redirect(url_for('login'))
     
     # 検索パラメータの取得
-    # search_postal_code = request.args.get('search_postal_code', '').strip() # 削除
-    # search_local_gov_code = request.args.get('search_local_gov_code', '').strip() # 削除
     search_prefecture = request.args.get('search_prefecture', '').strip()
     search_city_town_village = request.args.get('search_city_town_village', '').strip()
-    search_user_name = request.args.get('search_user_name', '').strip() # 追加
-    search_affiliation = request.args.get('search_affiliation', '').strip() # 追加
+    search_affiliation = request.args.get('search_affiliation', '').strip() # 所属を先に
+    search_user_name = request.args.get('search_user_name', '').strip() # 担当者名を後に
 
     # 市区町村データのクエリを構築
     municipalities_query = Municipality.query
 
-    # if search_postal_code: # 削除
-    #     municipalities_query = municipalities_query.filter(
-    #         Municipality.postal_code.ilike(f'%{search_postal_code}%')
-    #     )
-    # if search_local_gov_code: # 削除
-    #     municipalities_query = municipalities_query.filter(
-    #         Municipality.local_gov_code.ilike(f'%{search_local_gov_code}%')
-    #     )
     if search_prefecture:
         municipalities_query = municipalities_query.filter(
             Municipality.prefecture.ilike(f'%{search_prefecture}%')
@@ -501,20 +523,15 @@ def admin_dashboard():
             if user_area.municipality_id in municipality_user_map:
                 municipality_user_map[user_area.municipality_id].add(user_area.user_id)
     
-    # 検索結果に合致する市区町村と、それに紐づくユーザーのみを考慮して表示する
-    # これはall_municipalitiesとall_usersの組み合わせによって表示されるテーブル内容を動的に決定する
-    
     return render_template(
         'admin_dashboard.html',
         all_municipalities=all_municipalities,
         all_users=all_users, # 検索結果で絞り込まれたユーザーリスト
         municipality_user_map=municipality_user_map,
-        # search_postal_code=search_postal_code, # 削除
-        # search_local_gov_code=search_local_gov_code, # 削除
         search_prefecture=search_prefecture,
         search_city_town_village=search_city_town_village,
-        search_user_name=search_user_name, # 追加
-        search_affiliation=search_affiliation # 追加
+        search_user_name=search_user_name, # テンプレートに渡す
+        search_affiliation=search_affiliation # テンプレートに渡す
     )
 
 # 事務職員によるユーザー管理ページ（一覧表示）

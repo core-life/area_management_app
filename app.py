@@ -11,6 +11,11 @@ from sqlalchemy import or_, func, inspect
 from sqlalchemy.exc import IntegrityError 
 import logging 
 
+# Excel操作のためにopenpyxlモジュールからWorkbookとdataframe_to_rowsをインポート
+from openpyxl import Workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
+from openpyxl.styles import Border, Side, Font, Alignment # 追加: Excelスタイルのインポート
+
 # --- ロギングの設定 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 app_logger = logging.getLogger(__name__)
@@ -45,7 +50,7 @@ class User(db.Model):
     name = db.Column(db.String(80), nullable=False) # 表示用の名前 (スペース除去済み)
     password_hash = db.Column(db.String(256), nullable=False) # パスワードをハッシュ化して保存
     affiliation = db.Column(db.String(100), nullable=True) # 所属
-    is_admin = db.Column(db.Boolean, default=False) # 事務職員判定用
+    is_admin = db.Column(db.Boolean, default=False) # 管理者判定用
     is_first_login = db.Column(db.Boolean, default=True) # 初回ログインフラグ
     last_area_update = db.Column(db.DateTime, nullable=True) # 最終エリア更新日時を追加
 
@@ -218,7 +223,7 @@ with app.app_context():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'GET':
-        return render_template('login.html') # return ステートメントを追加
+        return render_template('login.html') 
 
     if request.method == 'POST':
         email = request.form['email'].strip()
@@ -237,7 +242,7 @@ def login():
                 return redirect(url_for('reset_password'))
             elif user.is_admin:
                 flash('ログインしました！', 'success')
-                return redirect(url_for('admin_dashboard'))
+                return redirect(url_for('admin_dashboard')) # 管理者ダッシュボード
             else:
                 flash('ログインしました！', 'success')
                 return redirect(url_for('sales_dashboard'))
@@ -279,7 +284,6 @@ def register():
             db.session.add(new_user)
             db.session.commit()
             app_logger.info(f"新規ユーザー {email} が登録されました。仮パスワード: {temporary_password} (非表示)") 
-            # 仮パスワードを画面に表示することを明確にするメッセージに変更
             flash(f'ユーザー登録が完了しました。以下の仮パスワードを使用してログインし、すぐにパスワードを再設定してください。<br><strong>仮パスワード: {temporary_password}</strong>', 'success')
             return render_template('registration_success.html', email=email, temporary_password=temporary_password) 
         except IntegrityError:
@@ -310,7 +314,7 @@ def reset_password():
         flash('パスワードは既に設定済みです。再度パスワードをリセットするには、「パスワードを忘れた場合」をご利用ください。', 'info')
         app_logger.info(f"ユーザー {user.email} が初回ログインパスワードリセットを試みましたが、既に設定済みでした。")
         if user.is_admin:
-            return redirect(url_for('admin_dashboard'))
+            return redirect(url_for('admin_dashboard')) # 管理者ダッシュボード
         else:
             return redirect(url_for('sales_dashboard'))
 
@@ -330,7 +334,7 @@ def reset_password():
             app_logger.info(f"ユーザー {user.email} のパスワードが正常に更新されました。")
             flash('パスワードが正常に更新されました！', 'success')
             if user.is_admin:
-                return redirect(url_for('admin_dashboard'))
+                return redirect(url_for('admin_dashboard')) # 管理者ダッシュボード
             else:
                 return redirect(url_for('sales_dashboard'))
         except Exception as e:
@@ -358,7 +362,6 @@ def forgot_password():
                 user.is_first_login = True
                 db.session.commit()
                 app_logger.info(f"ユーザー {email} の仮パスワードが発行されました: {temporary_password} (非表示)") 
-                # 仮パスワードを画面に表示することを明確にするメッセージに変更
                 flash('パスワードリセットリクエストを受け付けました。以下の仮パスワードを使用してログインし、初回ログイン時にパスワードを変更してください。', 'success')
                 return render_template('forgot_password_success.html', email=email, temporary_password=temporary_password) 
             except Exception as e:
@@ -639,8 +642,7 @@ def edit_user(user_id):
                 temporary_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for i in range(8))
                 user.set_password(temporary_password)
                 user.is_first_login = True
-                # 仮パスワードを画面に表示することを明確にするメッセージに変更
-                flash(f'ユーザー情報を更新し、パスワードをリセットしました。ユーザーには仮パスワードが画面に表示され、初回ログイン時に変更が必要です。仮パスワード: {temporary_password}', 'success')
+                flash(f'ユーザー情報を更新し、パスワードをリセットしました。ユーザーには仮パスワードが画面に表示され、初回ログイン時に変更が必要です。仮パスワード: {temporary_password}', 'success') # メッセージと仮パスワードを追加
                 app_logger.info(f"ユーザー {user.email} のパスワードが管理者によってリセットされました。新しい仮パスワード: {temporary_password} (非表示)") 
             else:
                 flash('ユーザー情報が更新されました。', 'success')
@@ -725,7 +727,6 @@ def download_excel(months):
         ws_main = wb.active
         ws_main.title = '対応エリア一覧'
 
-        from openpyxl.styles import Border, Side, Font, Alignment
         no_border = Border(left=Side(style=None), right=Side(style=None), top=Side(style=None), bottom=Side(style=None))
         header_font = Font(bold=True)
         header_alignment = Alignment(horizontal='center', vertical='center')
@@ -811,12 +812,14 @@ def download_excel(months):
         df_history = pd.DataFrame(history_data_summary)
         
         if not df_history.empty: # データがある場合のみシートを追加
+            # dataframe_to_rowsのgeneratorをリストに変換してappend
             for r_idx, row in enumerate(dataframe_to_rows(df_history, index=False, header=True), 1):
                 ws_history.append(row)
             
+            # ここを修正: row内のcellをループするように変更
             for row in ws_history.iter_rows():
-                for cell in cell: # ここはrow内のcellをループする必要があるので修正
-                    cell.border = no_border # これは意図されたものではない可能性あり
+                for cell in row: # rowオブジェクトから個々のcellにアクセス
+                    cell.border = no_border
         else: # 履歴がない場合でもシートを作成し、メッセージを記載
             ws_history.append(['選択された期間のエリア変更履歴はありません。'])
             if ws_history['A1']:
@@ -1008,7 +1011,7 @@ def admin_execute_municipality_update():
                 city_town_village=item_data['city_town_village']
             )
             db.session.add(new_municipality)
-            app_logger.info(f"新規市区町村 '{item_data['local_gov_code']}' が追加されました。")
+            app_logger.info(f"新規市区町村 '{item_data['local_gov_code']}' を追加しました。")
         
         for muni_data in updates:
             muni_to_update = Municipality.query.filter_by(local_gov_code=muni_data['local_gov_code']).first()
@@ -1016,16 +1019,16 @@ def admin_execute_municipality_update():
                 muni_to_update.postal_code = muni_data['new_postal_code']
                 muni_to_update.prefecture = muni_data['new_prefecture']
                 muni_to_update.city_town_village = muni_data['new_city_town_village']
-                app_logger.info(f"市区町村 '{muni_data['local_gov_code']}' が更新されました。")
+                app_logger.info(f"市区町村 '{muni_data['local_gov_code']}' を更新しました。")
         
         db.session.commit()
         flash(f'市区町村データが正常に更新されました！ (追加: {len(additions)}件, 更新: {len(updates)}件, 削除: {len(deletions)}件)', 'success')
         app_logger.info(f"市区町村データの一括更新が正常に完了しました。追加: {len(additions)}件, 更新: {len(updates)}件, 削除: {len(deletions)}件。")
 
-    except IntegrityError as e:
+    except IntegrityError: # IntegrityError を直接キャッチ
         db.session.rollback()
-        flash(f'市区町村データの更新中に整合性エラーが発生しました。重複する地方公共団体コードがないか確認してください。', 'danger')
-        app_logger.error(f"市区町村データの更新中にIntegrityErrorが発生: {e}", exc_info=True)
+        flash('市区町村データの更新中に整合性エラーが発生しました。重複する地方公共団体コードがないか確認してください。', 'danger')
+        app_logger.error(f"市区町村データの更新中にIntegrityErrorが発生しました。", exc_info=True)
         session['pending_additions'] = additions
         session['pending_updates'] = updates
         session['pending_deletions'] = deletions
@@ -1044,6 +1047,5 @@ def index():
     return redirect(url_for('login'))
 
 if __name__ == '__main__':
-    # ローカル開発環境でのみ、init_db_and_data()を明示的に呼び出す（自動実行はしない）
-    # Renderでは、app.app_context()ブロックで既に呼び出されます。
     app.run(debug=True)
+

@@ -46,7 +46,7 @@
             margin-right: 8px;
         }
         .diff-new {
-            color: #22c55e; /* green-500 */
+            color: #22c5e5; /* green-500 */ /* Tailwindのgreen-500に変更 */
         }
     </style>
 </head>
@@ -55,7 +55,7 @@
         <div class="flex justify-between items-center mb-6">
             <h2 class="text-3xl font-bold text-gray-800">市区町村データ更新</h2>
             <a href="{{ url_for('admin_dashboard') }}" class="flex items-center bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded-md shadow-sm transition duration-300">
-                <i class="fas fa-tachometer-alt mr-2"></i>ダッシュボードに戻る
+                <i class="fas fa-tachometer-alt mr-2"></i>管理者ダッシュボードに戻る {# 事務職員ダッシュボードから変更 #}
             </a>
         </div>
 

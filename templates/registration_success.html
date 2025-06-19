@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>パスワードリセット完了 - エリア管理アプリ</title>
+    <title>新規登録完了 - エリア管理アプリ</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
     <style>
@@ -14,13 +14,16 @@
 </head>
 <body class="bg-gray-100 min-h-screen flex items-center justify-center">
     <div class="w-full max-w-md bg-white p-8 rounded-lg shadow-md text-center">
-        <h2 class="text-3xl font-bold text-green-700 mb-6">パスワードリセット完了！</h2>
+        <h2 class="text-3xl font-bold text-green-700 mb-6">新規登録完了！</h2>
         <p class="text-gray-700 mb-4">
-            新しい仮パスワードを <span class="font-semibold">{{ email }}</span> 宛に送信しました。
+            <span class="font-semibold">{{ email }}</span> のユーザー登録が完了しました。
         </p>
         <p class="text-gray-700 mb-6">
-            仮パスワードを使用してログインし、すぐにパスワードを再設定してください。
+            以下の仮パスワードを使用してログインし、すぐにパスワードを再設定してください。
         </p>
+        <div class="bg-gray-100 border border-gray-300 rounded-md p-4 mb-6">
+            <p class="text-2xl font-bold text-blue-600 break-all">{{ temporary_password }}</p>
+        </div>
         <a href="{{ url_for('login') }}" class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 transform hover:scale-105">
             <i class="fas fa-sign-in-alt mr-2"></i>ログイン画面へ
         </a>

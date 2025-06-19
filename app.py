@@ -283,8 +283,9 @@ def register():
             db.session.add(new_user)
             db.session.commit()
             app_logger.info(f"新規ユーザー {email} が登録されました。仮パスワード: {temporary_password} (非表示)") # Log the password, but don't show to user
-            flash(f'ユーザー登録が完了しました。仮パスワードを <span class="font-semibold">{email}</span> 宛に送信しました。初回ログイン時にパスワードを変更してください。', 'success')
-            return render_template('registration_success.html', email=email) # Removed temporary_password
+            # 仮パスワードを画面に表示するように変更
+            flash(f'ユーザー登録が完了しました。以下の仮パスワードを使用してログインし、すぐにパスワードを再設定してください。<br><strong>仮パスワード: {temporary_password}</strong>', 'success')
+            return render_template('registration_success.html', email=email, temporary_password=temporary_password) # temporary_passwordを引数に追加
         except IntegrityError:
             db.session.rollback()
             flash('このメールアドレスは既に登録されています。', 'danger')
@@ -361,8 +362,9 @@ def forgot_password():
                 user.is_first_login = True
                 db.session.commit()
                 app_logger.info(f"ユーザー {email} の仮パスワードが発行されました: {temporary_password} (非表示)") # Log the password, but don't show to user
-                flash('パスワードリセットリクエストを受け付けました。新しい仮パスワードを <span class="font-semibold">{email}</span> 宛に送信しました。初回ログイン時にパスワードを変更してください。', 'success')
-                return render_template('forgot_password_success.html', email=email) # Removed temporary_password
+                # 仮パスワードを画面に表示するように変更
+                flash('パスワードリセットリクエストを受け付けました。以下の仮パスワードを使用してログインし、初回ログイン時にパスワードを変更してください。', 'success')
+                return render_template('forgot_password_success.html', email=email, temporary_password=temporary_password) # temporary_passwordを引数に追加
             except Exception as e:
                 db.session.rollback()
                 flash('パスワードリセット中にエラーが発生しました。', 'danger')
@@ -641,7 +643,7 @@ def edit_user(user_id):
                 temporary_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for i in range(8))
                 user.set_password(temporary_password)
                 user.is_first_login = True
-                flash(f'ユーザー情報を更新し、パスワードをリセットしました。ユーザーには仮パスワードがメールで送信され、初回ログイン時に変更が必要です。', 'success')
+                flash(f'ユーザー情報を更新し、パスワードをリセットしました。ユーザーには仮パスワードが画面に表示され、初回ログイン時に変更が必要です。仮パスワード: {temporary_password}', 'success') # メッセージと仮パスワードを追加
                 app_logger.info(f"ユーザー {user.email} のパスワードが管理者によってリセットされました。新しい仮パスワード: {temporary_password} (非表示)") # Log the password, but don't show to user
             else:
                 flash('ユーザー情報が更新されました。', 'success')
@@ -816,7 +818,7 @@ def download_excel(months):
                 ws_history.append(row)
             
             for row in ws_history.iter_rows():
-                for cell in row:
+                for cell in cell:
                     cell.border = no_border
         else: # 履歴がない場合でもシートを作成し、メッセージを記載
             ws_history.append(['選択された期間のエリア変更履歴はありません。'])

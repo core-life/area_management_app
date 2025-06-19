@@ -249,9 +249,9 @@ def register():
         try:
             db.session.add(new_user)
             db.session.commit()
-            app_logger.info(f"新規ユーザー {email} が登録されました。")
-            flash(f'ユーザー登録が完了しました。初回ログイン時にパスワードを変更してください。', 'success')
-            return render_template('registration_success.html', email=email, temporary_password=temporary_password)
+            app_logger.info(f"新規ユーザー {email} が登録されました。仮パスワード: {temporary_password} (非表示)") # Log the password, but don't show to user
+            flash(f'ユーザー登録が完了しました。仮パスワードを <span class="font-semibold">{email}</span> 宛に送信しました。初回ログイン時にパスワードを変更してください。', 'success')
+            return render_template('registration_success.html', email=email) # Removed temporary_password
         except IntegrityError:
             db.session.rollback()
             flash('このメールアドレスは既に登録されています。', 'danger')
@@ -327,9 +327,9 @@ def forgot_password():
                 user.set_password(temporary_password)
                 user.is_first_login = True
                 db.session.commit()
-                app_logger.info(f"ユーザー {email} の仮パスワードが発行されました。")
-                flash('パスワードリセットリクエストを受け付けました。', 'success')
-                return render_template('forgot_password_success.html', email=email, temporary_password=temporary_password)
+                app_logger.info(f"ユーザー {email} の仮パスワードが発行されました: {temporary_password} (非表示)") # Log the password, but don't show to user
+                flash('パスワードリセットリクエストを受け付けました。新しい仮パスワードを <span class="font-semibold">{email}</span> 宛に送信しました。', 'success')
+                return render_template('forgot_password_success.html', email=email) # Removed temporary_password
             except Exception as e:
                 db.session.rollback()
                 flash('パスワードリセット中にエラーが発生しました。', 'danger')
@@ -608,8 +608,8 @@ def edit_user(user_id):
                 temporary_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for i in range(8))
                 user.set_password(temporary_password)
                 user.is_first_login = True
-                flash(f'ユーザー情報を更新し、パスワードをリセットしました。新しい仮パスワード: {temporary_password} (初回ログイン時に変更が必要です)', 'success')
-                app_logger.info(f"ユーザー {user.email} のパスワードが管理者によってリセットされました。")
+                flash(f'ユーザー情報を更新し、パスワードをリセットしました。ユーザーには仮パスワードがメールで送信され、初回ログイン時に変更が必要です。', 'success')
+                app_logger.info(f"ユーザー {user.email} のパスワードが管理者によってリセットされました。新しい仮パスワード: {temporary_password} (非表示)") # Log the password, but don't show to user
             else:
                 flash('ユーザー情報が更新されました。', 'success')
                 app_logger.info(f"ユーザー {user.email} の情報が管理者によって更新されました。")

@@ -130,8 +130,10 @@
 
             monthsSelect.addEventListener('change', function() {
                 const selectedMonths = this.value;
-                const baseUrl = "{{ url_for('download_excel') }}";
-                downloadLink.href = `${baseUrl}?months=${selectedMonths}`;
+                // ここで url_for を直接使用せず、JavaScriptでURLを構築します。
+                // Flaskのurl_forはJinja2テンプレートエンジンでサーバーサイドで実行されるため、
+                // JavaScriptで動的に変更する際には使用できません。
+                downloadLink.href = `/download_excel?months=${selectedMonths}`;
             });
         });
     </script>

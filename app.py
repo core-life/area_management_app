@@ -253,7 +253,9 @@ def login():
             session['user_email'] = user.email
             session['user_name'] = user.name
             session['is_admin'] = user.is_admin
-            flash('ログインしました！', 'success') # 成功メッセージ
+            # ログイン成功のFlashメッセージは、初回ログインリダイレクトの後に表示される可能性があるので、初回ログイン時はスキップ
+            if not user.is_first_login:
+                flash('ログインしました！', 'success')
             
             # 初回ログインの場合はパスワードリセット画面へリダイレクト
             if user.is_first_login:
@@ -327,13 +329,18 @@ def reset_password():
     user = User.query.get(session['user_id'])
     
     # ユーザーが見つからない場合、または初回ログインフラグが立っていない場合はログイン画面へリダイレクト
-    if not user or not user.is_first_login:
-        # 管理者であればダッシュボードへ、そうでなければログインへ
-        if user and user.is_admin:
-            flash('既にパスワードは設定済みです。', 'info')
-            return redirect(url_for('admin_dashboard'))
-        flash('パスワードは既に設定済みです。再度パスワードをリセットするには、「パスワードを忘れた場合」をご利用ください。', 'info')
+    # user が None であればユーザーが見つからない。
+    # user が存在しても is_first_login が False であれば、初回ログインではない。
+    if not user:
+        flash('ユーザー情報が見つかりませんでした。再度ログインしてください。', 'danger')
         return redirect(url_for('login'))
+    elif not user.is_first_login:
+        flash('パスワードは既に設定済みです。再度パスワードをリセットするには、「パスワードを忘れた場合」をご利用ください。', 'info')
+        if user.is_admin:
+            return redirect(url_for('admin_dashboard'))
+        else:
+            return redirect(url_for('sales_dashboard'))
+
 
     # POSTリクエスト（パスワード再設定フォーム送信）の場合の処理
     if request.method == 'POST':

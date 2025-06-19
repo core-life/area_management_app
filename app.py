@@ -34,7 +34,7 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False) # ユーザー名はメールアドレスに固定
     name = db.Column(db.String(80), nullable=False) # 表示用の名前 (スペース除去済み)
-    password_hash = db.Column(db.String(256), nullable=False) # パスワードをハッシュ化して保存
+    password_hash = db.Column(db.String(256), nullable=False) # パスワードをハッシュ化して保存 (長さを128から256に増やしました)
     affiliation = db.Column(db.String(100), nullable=True) # 所属
     is_admin = db.Column(db.Boolean, default=False) # 事務職員判定用
     is_first_login = db.Column(db.Boolean, default=True) # 初回ログインフラグ
@@ -238,11 +238,13 @@ def register():
             db.session.add(new_user)
             db.session.commit()
 
+            # 成功したら、registration_success.html にリダイレクトし、仮パスワードを渡す
             flash(f'ユーザー登録が完了しました。初回ログイン時にパスワードを変更してください。', 'success')
             return render_template('registration_success.html', email=email, temporary_password=temporary_password)
         except Exception as e:
             db.session.rollback() 
             flash(f'ユーザー登録中にエラーが発生しました。もう一度お試しください。 ({e})', 'danger')
+            # エラー時も入力値を保持してテンプレートを再表示
             return render_template('register.html', email=email, affiliation=affiliation, name=name)
 
     return render_template('register.html')
@@ -592,6 +594,8 @@ def admin_upload_municipalities():
                 if not additions and not updates and not deletions:
                     flash('CSVファイルの内容は現在のデータと一致しています。変更はありませんでした。', 'info')
 
+                # ここで Municipalityオブジェクトを直接セッションに保存せず、辞書形式に変換して保存
+                # render_templateに渡す際は、辞書からMunicipalityオブジェクトに再構築
                 session['municipality_additions'] = [municipality_to_dict(m) for m in additions] 
                 session['municipality_updates'] = updates
                 session['municipality_deletions'] = [municipality_to_dict(m) for m in deletions] 
@@ -600,15 +604,18 @@ def admin_upload_municipalities():
                 flash(f'CSVファイルの読み込みまたは解析中にエラーが発生しました: {e}', 'danger')
                 return render_template('admin_upload_municipalities.html')
 
+    # Municipalityオブジェクトを辞書に変換するヘルパー関数
     def municipality_to_dict(muni):
         return {
-            'id': muni.id if hasattr(muni, 'id') else None, # idが存在しない場合を考慮
+            'id': muni.id if hasattr(muni, 'id') else None,
             'postal_code': muni.postal_code,
             'local_gov_code': muni.local_gov_code,
             'prefecture': muni.prefecture,
             'city_town_village': muni.city_town_village
         }
     
+    # セッションからデータを取得し、Municipalityオブジェクトに再構築してテンプレートに渡す
+    # セッションにデータがない場合は空のリスト
     additions = [Municipality(**d) for d in session.get('municipality_additions', [])]
     updates = session.get('municipality_updates', [])
     deletions = [Municipality(**d) for d in session.get('municipality_deletions', [])]

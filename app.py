@@ -228,17 +228,9 @@ def init_db_and_data():
 # ログインページを表示
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    # 既にログイン済みの場合は、初回ログイン状態や管理者権限に応じて適切なダッシュボードへリダイレクト
-    if 'user_id' in session:
-        user = User.query.get(session['user_id'])
-        if user:
-            if user.is_first_login: # 初回ログインの場合はパスワードリセット画面へ
-                flash('初回ログインです。新しいパスワードを設定してください。', 'info')
-                return redirect(url_for('reset_password'))
-            elif user.is_admin: # 管理者の場合は管理者ダッシュボードへ
-                return redirect(url_for('admin_dashboard'))
-            else: # 営業職員の場合は営業職員ダッシュボードへ
-                return redirect(url_for('sales_dashboard'))
+    # GETリクエストの場合、無条件でログイン画面を表示する
+    if request.method == 'GET':
+        return render_template('login.html')
 
     # POSTリクエスト（ログインフォーム送信）の場合の処理
     if request.method == 'POST':
@@ -253,9 +245,6 @@ def login():
             session['user_email'] = user.email
             session['user_name'] = user.name
             session['is_admin'] = user.is_admin
-            # ログイン成功のFlashメッセージは、初回ログインリダイレクトの後に表示される可能性があるので、初回ログイン時はスキップ
-            if not user.is_first_login:
-                flash('ログインしました！', 'success')
             
             # 初回ログインの場合はパスワードリセット画面へリダイレクト
             if user.is_first_login:
@@ -263,15 +252,16 @@ def login():
                 return redirect(url_for('reset_password'))
             # 管理者の場合は管理者ダッシュボードへリダイレクト
             elif user.is_admin:
+                flash('ログインしました！', 'success')
                 return redirect(url_for('admin_dashboard'))
             # それ以外（営業職員）は営業職員ダッシュボードへリダイレクト
             else:
+                flash('ログインしました！', 'success')
                 return redirect(url_for('sales_dashboard'))
         else:
             # ログイン失敗メッセージ
             flash('メールアドレスまたはパスワードが間違っています。', 'danger')
-    # GETリクエスト（ログイン画面表示）の場合の処理
-    return render_template('login.html')
+            return render_template('login.html') # ログイン画面を再表示
 
 # 新規登録ページを表示・処理
 @app.route('/register', methods=['GET', 'POST'])

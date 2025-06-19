@@ -11,6 +11,10 @@ from sqlalchemy import or_, func, inspect
 from sqlalchemy.exc import IntegrityError 
 import logging 
 
+# Excel操作のためにopenpyxlモジュールからWorkbookとdataframe_to_rowsをインポート
+from openpyxl import Workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
+
 # --- ロギングの設定 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 app_logger = logging.getLogger(__name__)
@@ -23,12 +27,17 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_super_secret_key_f
 # SQLiteを使う場合は、下記の設定のままですが、データは永続化されません。
 # Renderの ephemeral filesystem に対応するため、絶対パスで指定
 if os.environ.get('DATABASE_URL'):
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
+    # PostgreSQLの場合、psycopg2ドライバを指定するために'postgresql'を'postgresql+psycopg2'に置換
+    # RenderのDATABASE_URLは 'postgresql://' で始まるため、これを利用します
+    current_db_uri = os.environ.get('DATABASE_URL')
+    app.config['SQLALCHEMY_DATABASE_URI'] = current_db_uri.replace("postgresql://", "postgresql+psycopg2://")
+    app_logger.info(f"データベースURIをPostgreSQL用に設定しました: {app.config['SQLALCHEMY_DATABASE_URI']}")
 else:
     # Renderのプロジェクトルートからの相対パスでSQLiteファイルを指定
     # Render環境では /opt/render/project/src がプロジェクトのルート
     sqlite_db_path = os.path.join(os.getcwd(), 'instance', 'area_management.db')
     app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{sqlite_db_path}'
+    app_logger.info(f"データベースURIをSQLite用に設定しました: {app.config['SQLALCHEMY_DATABASE_URI']}")
     
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
@@ -97,23 +106,21 @@ def init_db_and_data():
         
         inspector = inspect(db.engine)
         
-        # データベースがPostgreSQLではなく、かつuserテーブルが存在しない場合にのみ再作成
-        # RenderのEphemeral filesystem上のSQLiteでのみ機能し、データは永続化されません。
-        # PostgreSQLを使う場合は、DB_URLが設定されているためこのブロックはスキップされます。
-        if not inspector.has_table("user") and not os.environ.get('DATABASE_URL'):
-            app_logger.warning("SQLiteデータベーススキーマが不完全、または存在しません。テーブルを再作成します。")
-            
-            # instanceフォルダが存在しない場合は作成
+        # SQLiteの場合、instanceフォルダが存在しない場合は作成
+        if not os.environ.get('DATABASE_URL'):
             instance_path = os.path.join(os.getcwd(), 'instance')
             if not os.path.exists(instance_path):
                 os.makedirs(instance_path)
                 app_logger.info(f"'{instance_path}' フォルダを作成しました。")
 
-            db.drop_all() 
+        # データベースが存在しない（テーブルが一つも無い）場合は、create_all() を実行
+        # PostgreSQLの場合、テーブルが既に存在してもcreate_all()はエラーにならないため安全です。
+        if not inspector.get_table_names():
+            app_logger.warning("データベーススキーマが存在しないため、テーブルを作成します。")
             db.create_all() 
             app_logger.info("データベーステーブルが作成されました。")
         else:
-            app_logger.info("データベーステーブルは既に存在するか、PostgreSQLが使用されています。")
+            app_logger.info("データベーステーブルは既に存在します。")
 
         # テスト管理者ユーザーの追加 (初回実行時のみ)
         admin_email = 'admin@clp-ytmm.com'
@@ -157,6 +164,7 @@ def init_db_and_data():
         # 市区町村データの読み込みと投入 (初回実行時のみ)
         csv_file_path = 'municipalities.csv'
         
+        # Municipalityテーブルが空で、かつCSVファイルが存在する場合にのみ投入
         if not Municipality.query.first() and os.path.exists(csv_file_path):
             app_logger.info(f"{csv_file_path}から市区町村データを投入します...")
             df = None
@@ -718,6 +726,7 @@ def download_excel(months):
         ws_main = wb.active
         ws_main.title = '対応エリア一覧'
 
+        from openpyxl.styles import Border, Side, Font, Alignment
         no_border = Border(left=Side(style=None), right=Side(style=None), top=Side(style=None), bottom=Side(style=None))
         header_font = Font(bold=True)
         header_alignment = Alignment(horizontal='center', vertical='center')

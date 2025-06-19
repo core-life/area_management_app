@@ -441,22 +441,24 @@ def admin_dashboard():
         return redirect(url_for('login'))
     
     # 検索パラメータの取得
-    search_postal_code = request.args.get('search_postal_code', '').strip()
-    search_local_gov_code = request.args.get('search_local_gov_code', '').strip()
+    # search_postal_code = request.args.get('search_postal_code', '').strip() # 削除
+    # search_local_gov_code = request.args.get('search_local_gov_code', '').strip() # 削除
     search_prefecture = request.args.get('search_prefecture', '').strip()
     search_city_town_village = request.args.get('search_city_town_village', '').strip()
+    search_user_name = request.args.get('search_user_name', '').strip() # 追加
+    search_affiliation = request.args.get('search_affiliation', '').strip() # 追加
 
     # 市区町村データのクエリを構築
     municipalities_query = Municipality.query
 
-    if search_postal_code:
-        municipalities_query = municipalities_query.filter(
-            Municipality.postal_code.ilike(f'%{search_postal_code}%')
-        )
-    if search_local_gov_code:
-        municipalities_query = municipalities_query.filter(
-            Municipality.local_gov_code.ilike(f'%{search_local_gov_code}%')
-        )
+    # if search_postal_code: # 削除
+    #     municipalities_query = municipalities_query.filter(
+    #         Municipality.postal_code.ilike(f'%{search_postal_code}%')
+    #     )
+    # if search_local_gov_code: # 削除
+    #     municipalities_query = municipalities_query.filter(
+    #         Municipality.local_gov_code.ilike(f'%{search_local_gov_code}%')
+    #     )
     if search_prefecture:
         municipalities_query = municipalities_query.filter(
             Municipality.prefecture.ilike(f'%{search_prefecture}%')
@@ -471,34 +473,48 @@ def admin_dashboard():
         Municipality.local_gov_code
     ).all()
 
-    # 営業職員のみを取得 (名前順)
-    all_users = User.query.filter_by(is_admin=False).order_by(User.name).all()
+    # 営業職員のクエリを構築
+    users_query = User.query.filter_by(is_admin=False)
+
+    if search_user_name:
+        users_query = users_query.filter(
+            User.name.ilike(f'%{search_user_name}%')
+        )
+    if search_affiliation:
+        users_query = users_query.filter(
+            User.affiliation.ilike(f'%{search_affiliation}%')
+        )
+    
+    all_users = users_query.order_by(User.name).all() # 検索結果で絞り込まれたユーザー
 
     # 各市区町村に対応するユーザーのIDをマッピングするための辞書
-    # 表示対象の市区町村IDのみをキーとして初期化する
     municipality_user_map = {muni.id: set() for muni in all_municipalities}
 
-    # 表示対象の市区町村に関連するUserAreaレコードのみを取得
-    municipality_ids_to_display = [m.id for m in all_municipalities]
-    user_areas_for_displayed_municipalities = UserArea.query.filter(
-        UserArea.municipality_id.in_(municipality_ids_to_display)
-    ).all()
-
-    for user_area in user_areas_for_displayed_municipalities:
-        # UserAreaのユーザーIDが営業職員であり、かつ対応する市区町村IDがマップに存在する場合のみ追加
-        # municipality_user_map[user_area.municipality_id] は既に存在することが保証される
-        if any(u.id == user_area.user_id for u in all_users):
-            municipality_user_map[user_area.municipality_id].add(user_area.user_id)
-
+    # 検索で絞り込まれたユーザーが担当するエリアのみを考慮
+    user_ids_to_display = [u.id for u in all_users]
+    if user_ids_to_display: # ユーザーが絞り込まれた場合のみ処理
+        user_areas_for_displayed_municipalities = UserArea.query.filter(
+            UserArea.user_id.in_(user_ids_to_display)
+        ).all()
+        for user_area in user_areas_for_displayed_municipalities:
+            # municipality_user_map に、表示対象の市区町村IDのキーがあることを確認
+            if user_area.municipality_id in municipality_user_map:
+                municipality_user_map[user_area.municipality_id].add(user_area.user_id)
+    
+    # 検索結果に合致する市区町村と、それに紐づくユーザーのみを考慮して表示する
+    # これはall_municipalitiesとall_usersの組み合わせによって表示されるテーブル内容を動的に決定する
+    
     return render_template(
         'admin_dashboard.html',
         all_municipalities=all_municipalities,
-        all_users=all_users,
+        all_users=all_users, # 検索結果で絞り込まれたユーザーリスト
         municipality_user_map=municipality_user_map,
-        search_postal_code=search_postal_code, # 検索値をテンプレートに渡す
-        search_local_gov_code=search_local_gov_code,
+        # search_postal_code=search_postal_code, # 削除
+        # search_local_gov_code=search_local_gov_code, # 削除
         search_prefecture=search_prefecture,
-        search_city_town_village=search_city_town_village
+        search_city_town_village=search_city_town_village,
+        search_user_name=search_user_name, # 追加
+        search_affiliation=search_affiliation # 追加
     )
 
 # 事務職員によるユーザー管理ページ（一覧表示）
@@ -799,13 +815,14 @@ def admin_upload_municipalities():
                     new_codes = set()
 
                     for index, row in df.iterrows():
-                        local_gov_code = str(row['地方公共団体コード']).strip() # ★日本語列名から取得★
+                        # KeyError を防ぐため、列の存在をチェック
+                        local_gov_code = str(row['地方公共団体コード']).strip() if '地方公共団体コード' in row else ''
                         new_codes.add(local_gov_code)
 
-                        # CSVデータの整形（NoneやNaNを空文字列に変換） - ★日本語列名から取得★
-                        postal_code = str(row['郵便番号']).strip() if pd.notna(row['郵便番号']) else ''
-                        prefecture = str(row['都道府県']).strip() if pd.notna(row['都道府県']) else ''
-                        city_town_village = str(row['市区町村']).strip() if pd.notna(row['市区町村']) else ''
+                        # CSVデータの整形（NoneやNaNを空文字列に変換）
+                        postal_code = str(row['郵便番号']).strip() if '郵便番号' in row and pd.notna(row['郵便番号']) else ''
+                        prefecture = str(row['都道府県']).strip() if '都道府県' in row and pd.notna(row['都道府県']) else ''
+                        city_town_village = str(row['市区町村']).strip() if '市区町村' in row and pd.notna(row['市区町村']) else ''
 
                         if local_gov_code in existing_codes:
                             # 既存の市区町村を更新
